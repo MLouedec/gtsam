@@ -170,6 +170,12 @@ if (GTSAM_BUILD_UNSTABLE)
   add_subdirectory(gtsam_unstable)
 endif()
 
+# Build parnav extensions (PARS factors, preintegration helpers) and the
+# programs that use them. extensions/ must be added first because programs/
+# links against the parnav_extensions OBJECT library.
+add_subdirectory(extensions)
+add_subdirectory(programs)
+
 # This is the new wrapper
 if(GTSAM_BUILD_PYTHON OR GTSAM_INSTALL_MATLAB_TOOLBOX)
     # Need to set this for the wrap package so we don't use the default value.

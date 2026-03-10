@@ -18,6 +18,7 @@
 #include "ImuBias.h"
 
 #include <gtsam/geometry/Point3.h>
+
 #include <iostream>
 
 namespace gtsam {
@@ -28,16 +29,21 @@ namespace imuBias {
 /*
  * NOTES:
  * - Earth-rate correction:
- *     + Currently the user should supply R_ECEF_to_G, which is the rotation from ECEF to Local-Level system (NED or ENU as defined by the user).
- *     + R_ECEF_to_G can be calculated by approximated values of latitude and longitude of the system.
- *     + A relatively small distance is traveled w.r.t. to initial pose is assumed, since R_ECEF_to_G is constant.
- *        Otherwise, R_ECEF_to_G should be updated each time using the current lat-lon.
+ *     + Currently the user should supply R_ECEF_to_G, which is the rotation
+ * from ECEF to Local-Level system (NED or ENU as defined by the user).
+ *     + R_ECEF_to_G can be calculated by approximated values of latitude and
+ * longitude of the system.
+ *     + A relatively small distance is traveled w.r.t. to initial pose is
+ * assumed, since R_ECEF_to_G is constant. Otherwise, R_ECEF_to_G should be
+ * updated each time using the current lat-lon.
  *
- *  - Currently, an empty constructed is not enabled so that the user is forced to specify R_ECEF_to_G.
+ *  - Currently, an empty constructed is not enabled so that the user is forced
+ * to specify R_ECEF_to_G.
  */
 //    // H1: Jacobian w.r.t. IMUBias
 //    // H2: Jacobian w.r.t. pose
-//    Vector CorrectGyroWithEarthRotRate(Vector measurement, const Pose3& pose, const Vector& w_earth_rate_G,
+//    Vector CorrectGyroWithEarthRotRate(Vector measurement, const Pose3& pose,
+//    const Vector& w_earth_rate_G,
 //        Matrix* H1=nullptr, Matrix* H2=nullptr) const {
 //
 //      Matrix R_G_to_I( pose.rotation().matrix().transpose() );
@@ -61,8 +67,9 @@ namespace imuBias {
 //
 //      return measurement - biasGyro_ - w_earth_rate_I;
 //
-////      Vector bias_gyro_temp{-bias_gyro_(0), bias_gyro_(1), bias_gyro_(2)};
-////      return measurement - bias_gyro_temp - R_G_to_I * w_earth_rate_G;
+////      Vector bias_gyro_temp((Vector(3) << -bias_gyro_(0), bias_gyro_(1),
+///bias_gyro_(2))); /      return measurement - bias_gyro_temp - R_G_to_I *
+///w_earth_rate_G;
 //    }
 /// ostream operator
 std::ostream& operator<<(std::ostream& os, const ConstantBias& bias) {
@@ -76,6 +83,17 @@ void ConstantBias::print(const std::string& s) const {
   std::cout << s << *this << std::endl;
 }
 
-} // namespace imuBias
+std::ostream& operator<<(std::ostream& os, const GaussMarkovBias& bias) {
+  os << "acc = " << bias.accelerometer().transpose();
+  os << " gyro = " << bias.gyroscope().transpose();
+  os << " tauAcc = " << bias.tauAcc_ << " tauGyro = " << bias.tauGyro_;
+  return os;
+}
 
-} // namespace gtsam
+void GaussMarkovBias::print(const std::string& s) const {
+  std::cout << s << *this << std::endl;
+}
+
+}  // namespace imuBias
+
+}  // namespace gtsam

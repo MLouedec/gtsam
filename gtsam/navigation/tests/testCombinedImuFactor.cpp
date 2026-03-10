@@ -152,7 +152,7 @@ TEST(CombinedImuFactor, FirstOrderPreIntegratedMeasurements) {
   };
 
   // Actual pre-integrated values
-  PreintegratedCombinedMeasurementsT<TangentPreintegration> pim(p);
+  PreintegratedCombinedMeasurementsT<TangentPreintegration<imuBias::ConstantBias>, imuBias::ConstantBias> pim(p);
   testing::integrateMeasurements(measurements, &pim);
 
   EXPECT(assert_equal(numericalDerivative21<Vector9, Vector3, Vector3>(
@@ -322,6 +322,89 @@ TEST(CombinedImuFactor, Accelerating) {
   auto estimatedCov = runner.estimateCovariance(T, 100);
   Eigen::Matrix<double, 15, 15> expected = pim.preintMeasCov();
   EXPECT(assert_equal(estimatedCov, expected, 0.1));
+}
+
+/* ************************************************************************* */
+// Numerical Jacobian test for GaussMarkov CombinedImuFactor
+TEST(CombinedImuFactor, GaussMarkovJacobians) {
+  using GMBias = imuBias::GaussMarkovBias;
+  using GMPreintegration = ManifoldPreintegration<GMBias>;
+  using GMPIM =
+      PreintegratedCombinedMeasurementsT<GMPreintegration, GMBias>;
+  using GMFactor = CombinedImuFactorT<GMPIM, GMBias>;
+
+  // Create params
+  auto p = PreintegrationCombinedParamsT<GMBias>::MakeSharedD(kGravity);
+  p->gyroscopeCovariance = kGyroSigma * kGyroSigma * I_3x3;
+  p->accelerometerCovariance = kAccelSigma * kAccelSigma * I_3x3;
+  p->integrationCovariance = 0.0001 * I_3x3;
+  p->biasAccCovariance = 0.001 * I_3x3;
+  p->biasOmegaCovariance = 0.001 * I_3x3;
+
+  double tauAcc = 300.0, tauGyro = 300.0;
+  GMBias biasHat(Vector3(0.1, 0, 0), Vector3(0, 0, 0.01), tauAcc, tauGyro);
+  GMPIM pim(p, biasHat);
+
+  // Integrate a few measurements
+  Vector3 measuredAcc(0.1, 0.0, -kGravity);
+  Vector3 measuredOmega(0.01, 0.0, 0.02);
+  double dt = 0.01;
+  for (int i = 0; i < 100; i++) {
+    pim.integrateMeasurement(measuredAcc, measuredOmega, dt);
+  }
+
+  // Linearization point
+  Pose3 pose_i(Rot3::Expmap(Vector3(0.01, 0.02, 0.03)),
+               Point3(1.0, 2.0, 3.0));
+  Vector3 vel_i(0.5, 0.1, -0.1);
+  Pose3 pose_j(Rot3::Expmap(Vector3(0.02, 0.03, 0.05)),
+               Point3(1.5, 2.1, 2.9));
+  Vector3 vel_j(0.6, 0.15, -0.05);
+  GMBias bias_i(Vector3(0.12, 0.01, -0.01), Vector3(0.01, -0.01, 0.02),
+                tauAcc, tauGyro);
+  GMBias bias_j(Vector3(0.11, 0.015, -0.005), Vector3(0.008, -0.012, 0.018),
+                tauAcc, tauGyro);
+
+  GMFactor factor(X(1), V(1), X(2), V(2), B(1), B(2), pim);
+
+  // Compute analytical Jacobians
+  Matrix H1a, H2a, H3a, H4a, H5a, H6a;
+  Vector error = factor.evaluateError(pose_i, vel_i, pose_j, vel_j, bias_i,
+                                      bias_j, H1a, H2a, H3a, H4a, H5a, H6a);
+
+  // Numerical Jacobians
+  auto f1 = [&](const Pose3& p1) {
+    return factor.evaluateError(p1, vel_i, pose_j, vel_j, bias_i, bias_j);
+  };
+  auto f2 = [&](const Vector3& v1) {
+    return factor.evaluateError(pose_i, v1, pose_j, vel_j, bias_i, bias_j);
+  };
+  auto f3 = [&](const Pose3& p2) {
+    return factor.evaluateError(pose_i, vel_i, p2, vel_j, bias_i, bias_j);
+  };
+  auto f4 = [&](const Vector3& v2) {
+    return factor.evaluateError(pose_i, vel_i, pose_j, v2, bias_i, bias_j);
+  };
+  auto f5 = [&](const GMBias& b1) {
+    return factor.evaluateError(pose_i, vel_i, pose_j, vel_j, b1, bias_j);
+  };
+  auto f6 = [&](const GMBias& b2) {
+    return factor.evaluateError(pose_i, vel_i, pose_j, vel_j, bias_i, b2);
+  };
+
+  Matrix H1n = numericalDerivative11<Vector, Pose3>(f1, pose_i);
+  Matrix H2n = numericalDerivative11<Vector, Vector3>(f2, vel_i);
+  Matrix H3n = numericalDerivative11<Vector, Pose3>(f3, pose_j);
+  Matrix H4n = numericalDerivative11<Vector, Vector3>(f4, vel_j);
+  Matrix H5n = numericalDerivative11<Vector, GMBias>(f5, bias_i);
+  Matrix H6n = numericalDerivative11<Vector, GMBias>(f6, bias_j);
+
+  EXPECT(assert_equal(H1n, H1a, 1e-5));
+  EXPECT(assert_equal(H2n, H2a, 1e-5));
+  EXPECT(assert_equal(H3n, H3a, 1e-5));
+  EXPECT(assert_equal(H4n, H4a, 1e-5));
+  EXPECT(assert_equal(H5n, H5a, 1e-5));
+  EXPECT(assert_equal(H6n, H6a, 1e-5));
 }
 
 /* ************************************************************************* */

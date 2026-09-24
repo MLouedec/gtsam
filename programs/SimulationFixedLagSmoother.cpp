@@ -122,6 +122,10 @@ struct Options {
       gtsam::SE23CovarianceMethod::Brossard;
   gtsam::SE23IncrementModel increment =
       gtsam::SE23IncrementModel::SimpleGlobalAcc;
+  // Legacy (SE3/NavState) increment: false = piecewise constant-body-IMU
+  // (default, matches SE_2(3); DR reconstructs to 0 on *_exact), true = GTSAM's
+  // native NavState::update (global-acc). Ignored for --preint se23.
+  bool legacy_use_gtsam_increment = false;
   // Input dataset IMU-generation model (run_orbital_simulation):
   //   "_exact"   -> exact inverse of GTSAM's ConstantBodyImu (DR reconstructs
   //                 to machine precision). Default.
@@ -452,7 +456,9 @@ void run_estimation(const SimulationData& sd, const Options& opts) {
                                           Eigen::Matrix<double, 15, 15>::Zero(),
                                           opts.increment, opts.cov_method);
   } else {
-    preintegrated = std::make_shared<PIM>(p, prior_bias);
+    preintegrated = std::make_shared<PIM>(
+        p, prior_bias, Eigen::Matrix<double, 15, 15>::Zero(),
+        opts.legacy_use_gtsam_increment);
   }
 
   // Previous state (rolled forward). For SE23 it's an ExtendedPose3; for
@@ -917,6 +923,9 @@ void print_usage(const char* prog) {
       << "  --covmethod {brossard|ours|vanloan}  se23 process-noise method\n"
       << "                           (default: brossard)\n"
       << "  --increment {simple|full}  se23 increment model (default: simple)\n"
+      << "  --legacy-increment {gtsam|full}  SE3/NavState increment: gtsam =\n"
+      << "                             native NavState::update, full = piecewise\n"
+      << "                             constant-body-IMU (default: full)\n"
       << "  --imu-gen {exact|highfid|simple}  input dataset IMU generation;\n"
       << "                             exact = *_exact (inverse of GTSAM's\n"
       << "                             ConstantBodyImu, DR reconstructs to\n"
@@ -1005,6 +1014,18 @@ bool parse_args(int argc, char** argv, Options& opts) {
         opts.increment = gtsam::SE23IncrementModel::ConstantBodyImu;
       else {
         std::cerr << "Unknown --increment value: " << v << "\n";
+        return false;
+      }
+    } else if (a == "--legacy-increment") {
+      if (!need_value(i, a)) return false;
+      std::string v = argv[++i];
+      if (v == "full")
+        opts.legacy_use_gtsam_increment = false;
+      else if (v == "gtsam")
+        opts.legacy_use_gtsam_increment = true;
+      else {
+        std::cerr << "Unknown --legacy-increment value: " << v
+                  << " (expected gtsam|full)\n";
         return false;
       }
     } else if (a == "--imu-gen") {

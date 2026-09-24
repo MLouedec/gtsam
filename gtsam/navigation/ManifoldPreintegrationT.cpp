@@ -123,7 +123,48 @@ void ManifoldPreintegrationT<Bias>::update(const Vector3& measuredAcc,
         D_correctedOmega_omega);
   }
 
-  // --- Constant-body-IMU mean step (matches the SE_2(3) path) ---
+  // ================= GtsamStandard: upstream NavState::update =================
+  if (increment_ == LegacyIncrement::GtsamStandard) {
+    const Rot3 oldRij = deltaXij_.attitude();
+    deltaTij_ += dt;
+    deltaXij_ = deltaXij_.update(acc, omega, dt, A, B, C);  // functional
+    if (p().body_P_sensor) {
+      *C *= D_correctedOmega_omega;
+      if (!p().body_P_sensor->translation().isZero())
+        *C += *B * D_correctedAcc_omega;
+      *B *= D_correctedAcc_acc;  // must be last
+    }
+    Matrix3 D_acc_R;
+    oldRij.rotate(acc, D_acc_R);
+    const Matrix3 D_acc_biasOmega = D_acc_R * delRdelBiasOmega_;
+    const Vector3 integratedOmega = omega * dt;
+    Matrix3 D_incrR_integratedOmega;
+    const Rot3 incrR = Rot3::Expmap(integratedOmega, D_incrR_integratedOmega);
+    const Matrix3 incrRt = incrR.transpose();
+    const double dt22 = 0.5 * dt * dt;
+    const Matrix3 dRij = oldRij.matrix();
+    if constexpr (std::is_same_v<Bias, imuBias::GaussMarkovBias>) {
+      const double t_k = deltaTij_ - dt;
+      const double ba = std::exp(-t_k / biasHat_.tauAcc());
+      const double bo = std::exp(-t_k / biasHat_.tauGyro());
+      delRdelBiasOmega_ =
+          incrRt * delRdelBiasOmega_ - bo * D_incrR_integratedOmega * dt;
+      delPdelBiasAcc_ += delVdelBiasAcc_ * dt - ba * dt22 * dRij;
+      delPdelBiasOmega_ += dt * delVdelBiasOmega_ + dt22 * D_acc_biasOmega;
+      delVdelBiasAcc_ += -ba * dRij * dt;
+      delVdelBiasOmega_ += D_acc_biasOmega * dt;
+    } else {
+      delRdelBiasOmega_ =
+          incrRt * delRdelBiasOmega_ - D_incrR_integratedOmega * dt;
+      delPdelBiasAcc_ += delVdelBiasAcc_ * dt - dt22 * dRij;
+      delPdelBiasOmega_ += dt * delVdelBiasOmega_ + dt22 * D_acc_biasOmega;
+      delVdelBiasAcc_ += -dRij * dt;
+      delVdelBiasOmega_ += D_acc_biasOmega * dt;
+    }
+    return;
+  }
+
+  // ================= ConstantBodyImu: piecewise (matches SE_2(3)) =============
   const NavState oldX = deltaXij_;
   const NavState newX = cbiMeanStep(oldX, acc, omega, dt);
 

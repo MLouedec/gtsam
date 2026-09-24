@@ -97,8 +97,15 @@ class GTSAM_EXPORT PreintegratedCombinedMeasurementsGMT
   PreintegratedCombinedMeasurementsGMT(
       const std::shared_ptr<Params>& p, const BiasType& biasHat = BiasType(),
       const Eigen::Matrix<double, 15, 15>& preintMeasCov =
-          Eigen::Matrix<double, 15, 15>::Zero())
+          Eigen::Matrix<double, 15, 15>::Zero(),
+      bool use_gtsam_increment = false)
       : PreintegrationType(p, biasHat), preintMeasCov_(preintMeasCov) {
+    // Select the legacy NavState increment: GTSAM's native (global-acc) method
+    // or the piecewise constant-body-IMU model (default, matches SE_2(3)).
+    this->setLegacyIncrement(
+        use_gtsam_increment
+            ? PreintegrationType::LegacyIncrement::GtsamStandard
+            : PreintegrationType::LegacyIncrement::ConstantBodyImu);
     this->PreintegrationType::resetIntegration();
   }
 

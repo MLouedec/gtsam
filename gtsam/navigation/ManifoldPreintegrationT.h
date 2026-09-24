@@ -45,6 +45,14 @@ class GTSAM_EXPORT ManifoldPreintegrationT : public PreintegrationBaseT<Bias> {
   using PreintegrationBaseT<Bias>::params;
   using PreintegrationBaseT<Bias>::biasHat;
   using PreintegrationBaseT<Bias>::correctMeasurementsBySensorPose;
+
+  /// Legacy (NavState/SE3) increment model.
+  ///   GtsamStandard  = upstream NavState::update (global-acc-like).
+  ///   ConstantBodyImu = piecewise constant-body-IMU (matches the SE_2(3) path).
+  enum class LegacyIncrement { GtsamStandard, ConstantBodyImu };
+  LegacyIncrement increment_ = LegacyIncrement::ConstantBodyImu;
+  void setLegacyIncrement(LegacyIncrement m) { increment_ = m; }
+
   /**
    * Pre-integrated navigation state, from frame i to frame
    * j Note: relative position does not take into account

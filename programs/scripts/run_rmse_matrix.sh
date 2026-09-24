@@ -55,9 +55,14 @@ modes=(
   "GNSS|--aiding gnss --no-noise --no-bias --init-from-truth"
   "InRun|--aiding gnss --with-noise --with-bias --init-from-truth"
 )
-# assumption-tag | flag  (exact-inverse generation only)
+# column-group tag | flags. Both groups use the exact-inverse generation; they
+# differ only in the SE3/legacy increment (SE23 rows ignore --legacy-increment,
+# so they are identical across groups -- a built-in sanity check):
+#   gtsam = GTSAM's native NavState::update (global-acc-like)
+#   full  = piecewise constant-body-IMU (matches SE23; DR reconstructs to 0)
 asmps=(
-  "exact|--imu-gen exact"
+  "gtsam|--imu-gen exact --legacy-increment gtsam"
+  "full|--imu-gen exact --legacy-increment full"
 )
 # method-label | preint | bias | extra-flags
 # Global-acc (--increment simple) cases are intentionally omitted: all

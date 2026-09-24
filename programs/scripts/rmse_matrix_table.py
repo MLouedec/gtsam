@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Build the 5-state RMSE matrix table from a run manifest.
 
-Reads a TSV manifest (mode, assumption, pose, bias, method, csv) written by
+Reads a TSV manifest (mode, group, pose, bias, method, csv) written by
 run_rmse_matrix.sh, computes the 3D-norm RMSE per state, and prints one
-Excel-pasteable block per mode. IMU measurements are generated as the exact
-inverse of GTSAM's ConstantBodyImu, so dead reckoning reconstructs to machine
-precision (all combos ~0 in the DR block).
+Excel-pasteable block per mode with two column groups side by side: the SE3
+legacy increment as GTSAM's native method (gtsam:) vs the piecewise
+constant-body-IMU (full:). IMU is generated as the exact inverse of
+ConstantBodyImu, so the 'full' group reconstructs to machine precision (~0 in
+the DR block); SE23 rows are identical across groups (flag ignored there).
 
 RMSE(state) = sqrt(mean_t sum_axes err^2). Units: Att [rad], Pos [m], Vel
 [m/s], AccBias [m/s^2], GyrBias [rad/s].
@@ -45,14 +47,18 @@ def main():
         cell[(mode, pose, bias, method, asmp)] = rmse(csv)
 
     st = list(STATES)
-    hdr = "Pose\tBias\tMethod\t" + "\t".join(st)
+    hdr = ("Pose\tBias\tMethod\t"
+           + "\t".join(f"gtsam:{s}" for s in st) + "\t"
+           + "\t".join(f"full:{s}" for s in st))
     for mode, combos in data.items():
         print(f"\n# {mode}")
         print(hdr)
         for pose, bias, method in combos:
-            s = cell.get((mode, pose, bias, method, "exact"), {})
-            vs = "\t".join(f"{s.get(k, float('nan')):.3f}" for k in st)
-            print(f"{pose}\t{bias.upper()}\t{method}\t{vs}")
+            g = cell.get((mode, pose, bias, method, "gtsam"), {})
+            f = cell.get((mode, pose, bias, method, "full"), {})
+            vg = "\t".join(f"{g.get(k, float('nan')):.3f}" for k in st)
+            vf = "\t".join(f"{f.get(k, float('nan')):.3f}" for k in st)
+            print(f"{pose}\t{bias.upper()}\t{method}\t{vg}\t{vf}")
 
 
 if __name__ == "__main__":

@@ -37,15 +37,14 @@ mkdir -p "$OUT"
 source "$REPO/.venv/bin/activate" 2>/dev/null || true
 
 # --- Check required datasets exist -----------------------------------------
-# 'exact' = generated as the exact inverse of GTSAM's ConstantBodyImu (DR
-# reconstructs to machine precision); 'highfid' = midpoint projection (kept as
-# an alternative). The global-acc ('simple') generation is no longer used.
+# Only the 'exact' generation is used: IMU generated as the exact inverse of
+# GTSAM's ConstantBodyImu, so dead reckoning reconstructs to machine precision.
+# (The midpoint 'highfid' and global-acc 'simple' generations are no longer
+# part of the comparison -- they only reintroduce discretisation artifacts.)
 missing=0
 for f in \
   "simulation_data_01_100Hz_exact_aided_at_${AIDING_HZ}Hz_cpp.csv" \
-  "simulation_data_01_100Hz_highfid_aided_at_${AIDING_HZ}Hz_cpp.csv" \
-  "simulation_data_01_100Hz_noisy_biased_exact_aided_at_${AIDING_HZ}Hz_cpp.csv" \
-  "simulation_data_01_100Hz_noisy_biased_highfid_aided_at_${AIDING_HZ}Hz_cpp.csv"; do
+  "simulation_data_01_100Hz_noisy_biased_exact_aided_at_${AIDING_HZ}Hz_cpp.csv"; do
   [ -f "$DATA_DIR/$f" ] || { echo "MISSING dataset: $DATA_DIR/$f" >&2; missing=1; }
 done
 [ "$missing" -eq 0 ] || echo "-> generate the missing files in run_orbital_simulation.m (see header)." >&2
@@ -56,10 +55,9 @@ modes=(
   "GNSS|--aiding gnss --no-noise --no-bias --init-from-truth"
   "InRun|--aiding gnss --with-noise --with-bias --init-from-truth"
 )
-# assumption-tag | flag
+# assumption-tag | flag  (exact-inverse generation only)
 asmps=(
   "exact|--imu-gen exact"
-  "highfid|--imu-gen highfid"
 )
 # method-label | preint | bias | extra-flags
 # Global-acc (--increment simple) cases are intentionally omitted: all

@@ -3,8 +3,9 @@
 
 Reads a TSV manifest (mode, assumption, pose, bias, method, csv) written by
 run_rmse_matrix.sh, computes the 3D-norm RMSE per state, and prints one
-Excel-pasteable block per mode with the two IMU-generation assumptions side by
-side (simple = constant-global-acc, highfid = piecewise-constant IMU).
+Excel-pasteable block per mode. IMU measurements are generated as the exact
+inverse of GTSAM's ConstantBodyImu, so dead reckoning reconstructs to machine
+precision (all combos ~0 in the DR block).
 
 RMSE(state) = sqrt(mean_t sum_axes err^2). Units: Att [rad], Pos [m], Vel
 [m/s], AccBias [m/s^2], GyrBias [rad/s].
@@ -44,18 +45,14 @@ def main():
         cell[(mode, pose, bias, method, asmp)] = rmse(csv)
 
     st = list(STATES)
-    hdr = ("Pose\tBias\tMethod\t"
-           + "\t".join(f"exact:{s}" for s in st) + "\t"
-           + "\t".join(f"highfid:{s}" for s in st))
+    hdr = "Pose\tBias\tMethod\t" + "\t".join(st)
     for mode, combos in data.items():
         print(f"\n# {mode}")
         print(hdr)
         for pose, bias, method in combos:
             s = cell.get((mode, pose, bias, method, "exact"), {})
-            h = cell.get((mode, pose, bias, method, "highfid"), {})
             vs = "\t".join(f"{s.get(k, float('nan')):.3f}" for k in st)
-            vh = "\t".join(f"{h.get(k, float('nan')):.3f}" for k in st)
-            print(f"{pose}\t{bias.upper()}\t{method}\t{vs}\t{vh}")
+            print(f"{pose}\t{bias.upper()}\t{method}\t{vs}")
 
 
 if __name__ == "__main__":

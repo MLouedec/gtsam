@@ -45,13 +45,13 @@ def main():
 
     st = list(STATES)
     hdr = ("Pose\tBias\tMethod\t"
-           + "\t".join(f"simple:{s}" for s in st) + "\t"
+           + "\t".join(f"exact:{s}" for s in st) + "\t"
            + "\t".join(f"highfid:{s}" for s in st))
     for mode, combos in data.items():
         print(f"\n# {mode}")
         print(hdr)
         for pose, bias, method in combos:
-            s = cell.get((mode, pose, bias, method, "simple"), {})
+            s = cell.get((mode, pose, bias, method, "exact"), {})
             h = cell.get((mode, pose, bias, method, "highfid"), {})
             vs = "\t".join(f"{s.get(k, float('nan')):.3f}" for k in st)
             vh = "\t".join(f"{h.get(k, float('nan')):.3f}" for k in st)

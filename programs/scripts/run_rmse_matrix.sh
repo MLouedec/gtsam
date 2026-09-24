@@ -37,11 +37,14 @@ mkdir -p "$OUT"
 source "$REPO/.venv/bin/activate" 2>/dev/null || true
 
 # --- Check required datasets exist -----------------------------------------
+# 'exact' = generated as the exact inverse of GTSAM's ConstantBodyImu (DR
+# reconstructs to machine precision); 'highfid' = midpoint projection (kept as
+# an alternative). The global-acc ('simple') generation is no longer used.
 missing=0
 for f in \
-  "simulation_data_01_100Hz_aided_at_${AIDING_HZ}Hz_cpp.csv" \
+  "simulation_data_01_100Hz_exact_aided_at_${AIDING_HZ}Hz_cpp.csv" \
   "simulation_data_01_100Hz_highfid_aided_at_${AIDING_HZ}Hz_cpp.csv" \
-  "simulation_data_01_100Hz_noisy_biased_aided_at_${AIDING_HZ}Hz_cpp.csv" \
+  "simulation_data_01_100Hz_noisy_biased_exact_aided_at_${AIDING_HZ}Hz_cpp.csv" \
   "simulation_data_01_100Hz_noisy_biased_highfid_aided_at_${AIDING_HZ}Hz_cpp.csv"; do
   [ -f "$DATA_DIR/$f" ] || { echo "MISSING dataset: $DATA_DIR/$f" >&2; missing=1; }
 done
@@ -55,19 +58,17 @@ modes=(
 )
 # assumption-tag | flag
 asmps=(
-  "simple|--imu-gen simple"
+  "exact|--imu-gen exact"
   "highfid|--imu-gen highfid"
 )
 # method-label | preint | bias | extra-flags
+# Global-acc (--increment simple) cases are intentionally omitted: all
+# preintegration now uses the piecewise-constant-IMU assumption.
 combos=(
   "GTSAM|legacy|cb|"
   "GTSAM+bias-tmpl|legacy|gm|"
-  "Brossard|se23|cb|--covmethod brossard --increment simple"
-  "Our-simple|se23|cb|--covmethod ours --increment simple"
   "Our-full|se23|cb|--covmethod ours --increment full"
   "VanLoan|se23|cb|--covmethod vanloan --increment full"
-  "Brossard|se23|gm|--covmethod brossard --increment simple"
-  "Our-simple|se23|gm|--covmethod ours --increment simple"
   "Our-full|se23|gm|--covmethod ours --increment full"
   "VanLoan|se23|gm|--covmethod vanloan --increment full"
 )

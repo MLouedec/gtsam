@@ -89,13 +89,14 @@ const std::string default_output_dir =
 /// simulation_data_<run>_100Hz[_noisy][_biased]_aided_at_<aiding_hz>Hz_cpp.csv
 /// (run is the simulator's iteration/%02d index; aiding_hz its aiding_Hz).
 inline std::string build_input_file(bool with_noise, bool with_bias,
-                                    bool with_highfid, int aiding_hz, int run) {
+                                    const std::string& gen_suffix, int aiding_hz,
+                                    int run) {
   char run_str[8];
   snprintf(run_str, sizeof(run_str), "%02d", run);
   std::string f = default_data_dir + "simulation_data_" + run_str + "_100Hz";
   if (with_noise) f += "_noisy";
   if (with_bias) f += "_biased";
-  if (with_highfid) f += "_highfid";
+  f += gen_suffix;  // "_exact" | "_highfid" | "" (see --imu-gen)
   f += "_aided_at_" + std::to_string(aiding_hz) + "Hz_cpp.csv";
   return f;
 }
@@ -121,11 +122,12 @@ struct Options {
       gtsam::SE23CovarianceMethod::Brossard;
   gtsam::SE23IncrementModel increment =
       gtsam::SE23IncrementModel::SimpleGlobalAcc;
-  // Select the input dataset's IMU specific-force projection
-  // (run_orbital_simulation highfid_imu): false -> standard file (start-of-step
-  // projection), true -> the *_highfid file (midpoint-frame specific force ->
-  // physically fair simple-vs-full comparison; the truth PVA is unchanged).
-  bool imu_gen_highfid = false;
+  // Input dataset IMU-generation model (run_orbital_simulation):
+  //   "_exact"   -> exact inverse of GTSAM's ConstantBodyImu (DR reconstructs
+  //                 to machine precision). Default.
+  //   "_highfid" -> midpoint-projection generation (O(Ts^2) consistent).
+  //   ""         -> start-of-step / global-acc generation.
+  std::string imu_gen_suffix = "_exact";
 };
 
 // ============================================================================
@@ -915,10 +917,11 @@ void print_usage(const char* prog) {
       << "  --covmethod {brossard|ours|vanloan}  se23 process-noise method\n"
       << "                           (default: brossard)\n"
       << "  --increment {simple|full}  se23 increment model (default: simple)\n"
-      << "  --imu-gen {simple|highfid} input dataset specific-force "
-         "projection;\n"
-      << "                             highfid selects the *_highfid file "
-         "(default: simple)\n"
+      << "  --imu-gen {exact|highfid|simple}  input dataset IMU generation;\n"
+      << "                             exact = *_exact (inverse of GTSAM's\n"
+      << "                             ConstantBodyImu, DR reconstructs to\n"
+      << "                             machine precision; default), highfid =\n"
+      << "                             *_highfid midpoint, simple = start-of-step\n"
       << "  --duration <seconds>     cap run length (0 = full data, default "
          "0)\n"
       << "  --with-noise|--no-noise  use the _noisy input variant (default "
@@ -1007,12 +1010,15 @@ bool parse_args(int argc, char** argv, Options& opts) {
     } else if (a == "--imu-gen") {
       if (!need_value(i, a)) return false;
       std::string v = argv[++i];
-      if (v == "simple")
-        opts.imu_gen_highfid = false;
+      if (v == "exact")
+        opts.imu_gen_suffix = "_exact";
       else if (v == "highfid")
-        opts.imu_gen_highfid = true;
+        opts.imu_gen_suffix = "_highfid";
+      else if (v == "simple")
+        opts.imu_gen_suffix = "";
       else {
-        std::cerr << "Unknown --imu-gen value: " << v << "\n";
+        std::cerr << "Unknown --imu-gen value: " << v
+                  << " (expected exact|highfid|simple)\n";
         return false;
       }
     } else if (a == "--aiding") {
@@ -1077,7 +1083,7 @@ int main(int argc, char* argv[]) {
   // it.
   if (opts.input_file.empty()) {
     opts.input_file =
-        build_input_file(opts.with_noise, opts.with_bias, opts.imu_gen_highfid,
+        build_input_file(opts.with_noise, opts.with_bias, opts.imu_gen_suffix,
                          opts.aiding_hz, opts.run);
   }
 

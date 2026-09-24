@@ -27,6 +27,46 @@ using namespace std;
 
 namespace gtsam {
 
+namespace {
+// Kernels replicating gtsam/navigation/ManifoldPreintegrationSE23.cpp so the
+// NavState (SE3) legacy path uses the SAME constant-body-IMU mean increment as
+// the SE_2(3) path (piecewise-constant body specific force / angular rate).
+inline Matrix3 so3_J_l_(const Vector3& theta) {
+  const double phi = theta.norm();
+  const Matrix3 S = skewSymmetric(theta);
+  if (phi < 1e-8) return I_3x3 + 0.5 * S + (1.0 / 6.0) * S * S;
+  const double phi2 = phi * phi;
+  return I_3x3 + ((1.0 - std::cos(phi)) / phi2) * S +
+         ((phi - std::sin(phi)) / (phi2 * phi)) * S * S;
+}
+inline Matrix3 se23_C_hat_(const Vector3& w_hat, double dt) {
+  const double w = w_hat.norm();
+  const Matrix3 Sw = skewSymmetric(w_hat);
+  const double dt2 = dt * dt;
+  Matrix3 C = 0.5 * dt2 * I_3x3;
+  if (w < 1e-8)
+    return C + (-dt2 * dt / 3.0) * Sw + (dt2 * dt2 / 8.0) * Sw * Sw;
+  const double th = w * dt, w2 = w * w, w3 = w2 * w, w4 = w2 * w2;
+  C += ((w * dt * std::cos(th) - std::sin(th)) / w3) * Sw +
+       ((0.5 * w2 * dt2 - std::cos(th) - w * dt * std::sin(th) + 1.0) / w4) * Sw *
+           Sw;
+  return C;
+}
+inline Matrix3 se23_pos_kernel_(const Vector3& w, double dt) {
+  return dt * dt * so3_J_l_(w * dt) - se23_C_hat_(-w, dt);
+}
+// One gravity-free constant-body-IMU delta step on a NavState (R, t, v).
+inline NavState cbiMeanStep(const NavState& X, const Vector3& acc,
+                            const Vector3& omega, double dt) {
+  const Rot3 dR = Rot3::Expmap(omega * dt);
+  const Vector3 dv_b = so3_J_l_(omega * dt) * acc * dt;
+  const Vector3 dp_b = se23_pos_kernel_(omega, dt) * acc;
+  const Rot3 R = X.attitude();
+  return NavState(R * dR, X.position() + X.velocity() * dt + R.matrix() * dp_b,
+                  X.velocity() + R.matrix() * dv_b);
+}
+}  // namespace
+
 //------------------------------------------------------------------------------
 
 //------------------------------------------------------------------------------
@@ -83,59 +123,70 @@ void ManifoldPreintegrationT<Bias>::update(const Vector3& measuredAcc,
         D_correctedOmega_omega);
   }
 
-  // Save current rotation for updating Jacobians
-  const Rot3 oldRij = deltaXij_.attitude();
+  // --- Constant-body-IMU mean step (matches the SE_2(3) path) ---
+  const NavState oldX = deltaXij_;
+  const NavState newX = cbiMeanStep(oldX, acc, omega, dt);
 
-  // Do update
+  // --- Jacobians by central finite differences, in NavState [R, t, v] tangent.
+  //     A = d(newX)/d(oldX), B = d(newX)/d(acc), C = d(newX)/d(omega). Using FD
+  //     keeps them consistent with the constant-body-IMU mean (the SE_2(3) path
+  //     likewise finite-differences its input Jacobian).
+  const double eps = 1e-6, inv2e = 1.0 / (2.0 * eps);
+  for (int i = 0; i < 9; ++i) {
+    Vector9 d = Vector9::Zero();
+    d(i) = eps;
+    A->col(i) = newX.localCoordinates(cbiMeanStep(oldX.retract(d), acc, omega,
+                                                  dt)) *
+                    inv2e -
+                newX.localCoordinates(cbiMeanStep(oldX.retract(-d), acc, omega,
+                                                  dt)) *
+                    inv2e;
+  }
+  for (int j = 0; j < 3; ++j) {
+    Vector3 e = Vector3::Zero();
+    e(j) = eps;
+    B->col(j) = (newX.localCoordinates(cbiMeanStep(oldX, acc + e, omega, dt)) -
+                 newX.localCoordinates(cbiMeanStep(oldX, acc - e, omega, dt))) *
+                inv2e;
+    C->col(j) = (newX.localCoordinates(cbiMeanStep(oldX, acc, omega + e, dt)) -
+                 newX.localCoordinates(cbiMeanStep(oldX, acc, omega - e, dt))) *
+                inv2e;
+  }
+
   deltaTij_ += dt;
-  deltaXij_ = deltaXij_.update(acc, omega, dt, A, B, C);  // functional
+  deltaXij_ = newX;
 
   if (p().body_P_sensor) {
-    // More complicated derivatives in case of non-trivial sensor pose
     *C *= D_correctedOmega_omega;
-    if (!p().body_P_sensor->translation().isZero())
-      *C += *B * D_correctedAcc_omega;
-    *B *= D_correctedAcc_acc;  // NOTE(frank): needs to be last
+    if (!p().body_P_sensor->translation().isZero()) *C += *B * D_correctedAcc_omega;
+    *B *= D_correctedAcc_acc;  // must be last
   }
 
-  // Update Jacobians
-  // TODO(frank): Try same simplification as in new approach
-  Matrix3 D_acc_R;
-  oldRij.rotate(acc, D_acc_R);
-  const Matrix3 D_acc_biasOmega = D_acc_R * delRdelBiasOmega_;
-
-  const Vector3 integratedOmega = omega * dt;
-  Matrix3 D_incrR_integratedOmega;
-  const Rot3 incrR =
-      Rot3::Expmap(integratedOmega, D_incrR_integratedOmega);  // expensive !!
-  const Matrix3 incrRt = incrR.transpose();
-
-  double dt22 = 0.5 * dt * dt;
-  const Matrix3 dRij = oldRij.matrix();  // expensive
-
-  // For ConstantBias: acc_H_biasAcc = -I, omega_H_biasOmega = -I (beta = 1)
-  // For GaussMarkovBias: acc_H_biasAcc = -beta_acc * I, omega_H_biasOmega =
-  // -beta_omega * I
+  // --- Bias Jacobian J = d(preint delta)/d(bias_i) via J <- A*J + G_bias.
+  //     acc = meas - beta_acc*bias_acc, omega = meas - beta_omega*bias_omega, so
+  //     d(delta)/d(bias) = [-beta_acc*B | -beta_omega*C] (beta = 1 for
+  //     ConstantBias). Blocks are in NavState [R, t(P), v(V)] x [acc, gyro].
+  double beta_acc = 1.0, beta_omega = 1.0;
   if constexpr (std::is_same_v<Bias, imuBias::GaussMarkovBias>) {
-    // Use accumulated time at the measurement point (deltaTij_ was already
-    // incremented above, so subtract dt to get the time of this measurement).
     const double t_k = deltaTij_ - dt;
-    const double beta_acc = std::exp(-t_k / biasHat_.tauAcc());
-    const double beta_omega = std::exp(-t_k / biasHat_.tauGyro());
-    delRdelBiasOmega_ =
-        incrRt * delRdelBiasOmega_ - beta_omega * D_incrR_integratedOmega * dt;
-    delPdelBiasAcc_ += delVdelBiasAcc_ * dt - beta_acc * dt22 * dRij;
-    delPdelBiasOmega_ += dt * delVdelBiasOmega_ + dt22 * D_acc_biasOmega;
-    delVdelBiasAcc_ += -beta_acc * dRij * dt;
-    delVdelBiasOmega_ += D_acc_biasOmega * dt;
-  } else {
-    delRdelBiasOmega_ =
-        incrRt * delRdelBiasOmega_ - D_incrR_integratedOmega * dt;
-    delPdelBiasAcc_ += delVdelBiasAcc_ * dt - dt22 * dRij;
-    delPdelBiasOmega_ += dt * delVdelBiasOmega_ + dt22 * D_acc_biasOmega;
-    delVdelBiasAcc_ += -dRij * dt;
-    delVdelBiasOmega_ += D_acc_biasOmega * dt;
+    beta_acc = std::exp(-t_k / biasHat_.tauAcc());
+    beta_omega = std::exp(-t_k / biasHat_.tauGyro());
   }
+  Matrix96 J = Matrix96::Zero();
+  J.block<3, 3>(0, 3) = delRdelBiasOmega_;
+  J.block<3, 3>(3, 0) = delPdelBiasAcc_;
+  J.block<3, 3>(3, 3) = delPdelBiasOmega_;
+  J.block<3, 3>(6, 0) = delVdelBiasAcc_;
+  J.block<3, 3>(6, 3) = delVdelBiasOmega_;
+  Matrix96 Gb = Matrix96::Zero();
+  Gb.block<9, 3>(0, 0) = -beta_acc * (*B);
+  Gb.block<9, 3>(0, 3) = -beta_omega * (*C);
+  J = (*A) * J + Gb;
+  delRdelBiasOmega_ = J.block<3, 3>(0, 3);
+  delPdelBiasAcc_ = J.block<3, 3>(3, 0);
+  delPdelBiasOmega_ = J.block<3, 3>(3, 3);
+  delVdelBiasAcc_ = J.block<3, 3>(6, 0);
+  delVdelBiasOmega_ = J.block<3, 3>(6, 3);
 }
 
 //------------------------------------------------------------------------------

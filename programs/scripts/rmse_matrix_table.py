@@ -54,17 +54,46 @@ def main():
     groups = order + [g for g in seen if g not in order]
 
     st = list(STATES)
-    hdr = "Pose\tBias\tMethod\t" + "\t".join(
-        f"{grp}:{s}" for grp in groups for s in st)
+    sep = "  "
+    header = ["Pose", "Bias", "Method"] + [s for _ in groups for s in st]
+
+    # Gather all rows (per mode) so column widths align across the whole table.
+    sections = []  # (mode, [row-of-strings])
     for mode, combos in data.items():
-        print(f"\n# {mode}")
-        print(hdr)
+        body = []
         for pose, bias, method in combos:
-            vals = []
+            row = [pose, bias.upper(), method]
             for grp in groups:
                 c = cell.get((mode, pose, bias, method, grp), {})
-                vals += [f"{c.get(k, float('nan')):.3f}" for k in st]
-            print(f"{pose}\t{bias.upper()}\t{method}\t" + "\t".join(vals))
+                row += [f"{c.get(k, float('nan')):.3f}" for k in st]
+            body.append(row)
+        sections.append((mode, body))
+
+    w = [len(h) for h in header]
+    for _, body in sections:
+        for row in body:
+            for i, s in enumerate(row):
+                w[i] = max(w[i], len(s))
+
+    def fmt(row):  # labels left-justified, numbers right-justified
+        return sep.join(s.ljust(w[i]) if i < 3 else s.rjust(w[i])
+                        for i, s in enumerate(row))
+
+    def band():  # group name centred over its 5 state columns
+        parts = [" " * w[i] for i in range(3)]
+        idx = 3
+        for grp in groups:
+            span = sum(w[idx:idx + len(st)]) + len(sep) * (len(st) - 1)
+            parts.append(grp.center(span))
+            idx += len(st)
+        return sep.join(parts)
+
+    for mode, body in sections:
+        print(f"\n# {mode}")
+        print(band())
+        print(fmt(header))
+        for row in body:
+            print(fmt(row))
 
 
 if __name__ == "__main__":

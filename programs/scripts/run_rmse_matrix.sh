@@ -60,11 +60,12 @@ modes=(
 # so they are identical across groups -- a built-in sanity check):
 #   gtsam = GTSAM's native NavState::update (global-acc-like)
 #   full  = piecewise constant-body-IMU (matches SE23; DR reconstructs to 0)
-# Select which groups to run with GROUPS (default both): e.g. GROUPS=full,
-# GROUPS=gtsam, or GROUPS="gtsam full".
-GROUPS="${GROUPS:-gtsam full}"
+# Select which groups to run with MATRIX_GROUPS (default both): e.g.
+# MATRIX_GROUPS=full, MATRIX_GROUPS=gtsam, or MATRIX_GROUPS="gtsam full".
+# (NB: do NOT use $GROUPS -- that is a reserved bash array of the user's gids.)
+MATRIX_GROUPS="${MATRIX_GROUPS:-gtsam full}"
 asmps=()
-for grp in $GROUPS; do
+for grp in $MATRIX_GROUPS; do
   case "$grp" in
     gtsam) asmps+=("gtsam|--imu-gen exact --legacy-increment gtsam") ;;
     full)  asmps+=("full|--imu-gen exact --legacy-increment full") ;;

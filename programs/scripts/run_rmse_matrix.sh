@@ -60,10 +60,17 @@ modes=(
 # so they are identical across groups -- a built-in sanity check):
 #   gtsam = GTSAM's native NavState::update (global-acc-like)
 #   full  = piecewise constant-body-IMU (matches SE23; DR reconstructs to 0)
-asmps=(
-  "gtsam|--imu-gen exact --legacy-increment gtsam"
-  "full|--imu-gen exact --legacy-increment full"
-)
+# Select which groups to run with GROUPS (default both): e.g. GROUPS=full,
+# GROUPS=gtsam, or GROUPS="gtsam full".
+GROUPS="${GROUPS:-gtsam full}"
+asmps=()
+for grp in $GROUPS; do
+  case "$grp" in
+    gtsam) asmps+=("gtsam|--imu-gen exact --legacy-increment gtsam") ;;
+    full)  asmps+=("full|--imu-gen exact --legacy-increment full") ;;
+    *) echo "Unknown GROUPS entry: $grp (expected gtsam|full)" >&2; exit 1 ;;
+  esac
+done
 # method-label | preint | bias | extra-flags
 # Global-acc (--increment simple) cases are intentionally omitted: all
 # preintegration now uses the piecewise-constant-IMU assumption.

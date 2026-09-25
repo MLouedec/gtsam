@@ -39,26 +39,32 @@ def rmse(csv):
 def main():
     rows = [l.rstrip("\n").split("\t") for l in open(sys.argv[1]) if l.strip()]
     data = OrderedDict()   # mode -> [(pose,bias,method)] preserving order
-    cell = {}              # (mode,pose,bias,method,assumption) -> rmse dict
+    cell = {}              # (mode,pose,bias,method,group) -> rmse dict
+    seen = []              # column groups present, in first-seen order
     for mode, asmp, pose, bias, method, csv in rows:
         data.setdefault(mode, [])
         if (pose, bias, method) not in data[mode]:
             data[mode].append((pose, bias, method))
+        if asmp not in seen:
+            seen.append(asmp)
         cell[(mode, pose, bias, method, asmp)] = rmse(csv)
 
+    # Only print the groups that actually ran; stable order gtsam, full, rest.
+    order = [g for g in ("gtsam", "full") if g in seen]
+    groups = order + [g for g in seen if g not in order]
+
     st = list(STATES)
-    hdr = ("Pose\tBias\tMethod\t"
-           + "\t".join(f"gtsam:{s}" for s in st) + "\t"
-           + "\t".join(f"full:{s}" for s in st))
+    hdr = "Pose\tBias\tMethod\t" + "\t".join(
+        f"{grp}:{s}" for grp in groups for s in st)
     for mode, combos in data.items():
         print(f"\n# {mode}")
         print(hdr)
         for pose, bias, method in combos:
-            g = cell.get((mode, pose, bias, method, "gtsam"), {})
-            f = cell.get((mode, pose, bias, method, "full"), {})
-            vg = "\t".join(f"{g.get(k, float('nan')):.3f}" for k in st)
-            vf = "\t".join(f"{f.get(k, float('nan')):.3f}" for k in st)
-            print(f"{pose}\t{bias.upper()}\t{method}\t{vg}\t{vf}")
+            vals = []
+            for grp in groups:
+                c = cell.get((mode, pose, bias, method, grp), {})
+                vals += [f"{c.get(k, float('nan')):.3f}" for k in st]
+            print(f"{pose}\t{bias.upper()}\t{method}\t" + "\t".join(vals))
 
 
 if __name__ == "__main__":

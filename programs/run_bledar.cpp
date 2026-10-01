@@ -87,8 +87,9 @@ struct Options {
   double bias_scaling = 1.0;  // datasheet-true stationary bias sigma
   bool use_music = false;
 
-  // Gauss-Markov bias correlation times [s], independent per channel (only used
-  // for --bias gm; ConstantBias keeps a fixed reference). PLACEHOLDER defaults
+  // Gauss-Markov bias correlation times [s], independent per channel. GM uses
+  // them for decay + PSD; ConstantBias for its Wiener PSD matched to GM at 1 s.
+  // PLACEHOLDER defaults
   // pending the consistency/RMSE tau sweep -- the STIM300's true correlation
   // times are long and not resolvable from the 224 s flight-static window, so
   // set these via --bias-tau-{acc,gyro}.
@@ -114,7 +115,8 @@ static void print_usage(const char* prog) {
       << "  --bias-tau-acc <s>         GM accel-bias correlation time "
          "(default 3600)\n"
       << "  --bias-tau-gyro <s>        GM gyro-bias correlation time "
-         "(default 3600); gm only\n"
+         "(default 3600); cb uses both for\n"
+      << "                             its Wiener PSD matched to GM at 1 s\n"
       << "  --aiding {gnss|pars|uwb}    aiding source (default gnss)\n"
       << "  --switch-time <s>           pars/uwb: GNSS bootstrap until <s>\n"
       << "                              then switch to pars/uwb (default 400)\n"
@@ -431,13 +433,12 @@ void run_estimation(const Data& d, const Options& opts) {
   const double g0 = 9.80665;
   const double vrw = 0.07, arw = 0.15;
 
-  // GM bias correlation times [s], INDEPENDENT per channel. Tunable for
-  // GaussMarkovBias (--bias-tau-{acc,gyro}); fixed 3600 s reference for
-  // ConstantBias (so tuning tau does not move the CB baseline). These feed BOTH
-  // q_b (= 2 sigma^2 / tau) and the GaussMarkovBias constructor.
+  // GM bias correlation times [s], INDEPENDENT per channel
+  // (--bias-tau-{acc,gyro}). Used by BOTH bias models: GM for its decay and
+  // driving PSD, Wiener (ConstantBias) for the PSD matched to GM at t_eval.
   constexpr bool kIsGM = std::is_same_v<BIAS, gtsam::imuBias::GaussMarkovBias>;
-  const double T_acc = kIsGM ? opts.bias_tau_acc : 3600.0;
-  const double T_ars = kIsGM ? opts.bias_tau_gyro : 3600.0;
+  const double T_acc = opts.bias_tau_acc;
+  const double T_ars = opts.bias_tau_gyro;
 
   // Stationary bias variance from the STIM300 datasheet Allan floor:
   //   B = ASD_min / 0.664 ,  sigma_b^2 = 2 * B^2 * ln(2) / pi   (bias instab.).
@@ -453,13 +454,21 @@ void run_estimation(const Data& d, const Options& opts) {
   const double q_v = std::pow(opts.acc_noise_scaling * vrw / 60.0, 2.0);
   const double q_o =
       std::pow((opts.gyro_noise_scaling * arw / 60.0) * deg2rad(1.0), 2.0);
-  // Driving PSD q = 2 sigma^2 / tau; bias_scaling inflates the stationary sigma
-  // (so variance scales by bias_scaling^2). With the datasheet sigma above, the
-  // physically-true run is --bias-scaling 1.
+  // Stationary variance P_inf = sigma^2; bias_scaling inflates the stationary
+  // sigma (so variance scales by bias_scaling^2). With the datasheet sigma
+  // above, the physically-true run is --bias-scaling 1.
+  const double P_inf_v = std::pow(opts.bias_scaling, 2.0) * sig2_ba;
+  const double P_inf_o = std::pow(opts.bias_scaling, 2.0) * sig2_bg;
+  // Driving PSD. GM: q = 2 P_inf / tau. Wiener (ConstantBias): the PSD whose
+  // t_eval-integral equals the GM variance at t_eval, so both bias models
+  // share the same covariance at t = t_eval seconds (as in the simulator).
+  const double t_eval = 1.0;
   const double q_b_v =
-      (2.0 / T_acc) * std::pow(opts.bias_scaling, 2.0) * sig2_ba;
+      kIsGM ? (2.0 / T_acc) * P_inf_v
+            : P_inf_v * (1.0 - std::exp(-2.0 * t_eval / T_acc)) / t_eval;
   const double q_b_o =
-      (2.0 / T_ars) * std::pow(opts.bias_scaling, 2.0) * sig2_bg;
+      kIsGM ? (2.0 / T_ars) * P_inf_o
+            : P_inf_o * (1.0 - std::exp(-2.0 * t_eval / T_ars)) / t_eval;
 
   auto p = gtsam::PreintegrationCombinedParamsT<BIAS>::MakeSharedD(g0);
   p->accelerometerCovariance = gtsam::I_3x3 * q_v;
@@ -764,7 +773,6 @@ void run_estimation(const Data& d, const Options& opts) {
       }
       prev_bias = result.at<BIAS>(B(correction_count));
       preintegrated->resetIntegrationAndSetBias(prev_bias);
-
       est_R.push_back(R_est);
       est_p.push_back(p_est);
       est_v.push_back(v_est);

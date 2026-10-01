@@ -12,6 +12,7 @@ the DR block); SE23 rows are identical across groups (flag ignored there).
 RMSE(state) = sqrt(mean_t sum_axes err^2). Units: Att [rad], Pos [m], Vel
 [m/s], AccBias [m/s^2], GyrBias [rad/s].
 """
+import os
 import sys
 from collections import OrderedDict
 
@@ -37,6 +38,7 @@ def rmse(csv):
 
 
 def main():
+    prec = int(os.environ.get("PREC", "3"))   # decimals in the RMSE cells
     rows = [l.rstrip("\n").split("\t") for l in open(sys.argv[1]) if l.strip()]
     data = OrderedDict()   # mode -> [(pose,bias,method)] preserving order
     cell = {}              # (mode,pose,bias,method,group) -> rmse dict
@@ -65,7 +67,7 @@ def main():
             row = [pose, bias.upper(), method]
             for grp in groups:
                 c = cell.get((mode, pose, bias, method, grp), {})
-                row += [f"{c.get(k, float('nan')):.3f}" for k in st]
+                row += [f"{c.get(k, float('nan')):.{prec}f}" for k in st]
             body.append(row)
         sections.append((mode, body))
 

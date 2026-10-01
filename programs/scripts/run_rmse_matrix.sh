@@ -27,6 +27,7 @@ OUT="${OUT:-$REPO/programs/scripts/results}"
 # NOTE: the plotter only writes/overwrites its own named figures + the appendix
 # .tex here -- it never deletes anything else in this directory.
 FIG_DIR="${FIG_DIR:-/Users/ghms/Dropbox/Apper/Overleaf/IEEE TAES Journal/figures_debug}"
+PREC="${PREC:-3}"; export PREC   # decimals in the RMSE table cells
 YLIM="${YLIM:-half}"       # y-limit bound: half (peak est. error after midpoint,
                            # default) | err (end est. error) |
                            # end (steady-state uncertainty) | max (peak uncert.)

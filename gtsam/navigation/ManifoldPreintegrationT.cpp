@@ -102,18 +102,19 @@ void ManifoldPreintegrationT<Bias>::update(const Vector3& measuredAcc,
                                           const Vector3& measuredOmega,
                                           const double dt, Matrix9* A,
                                           Matrix93* B, Matrix93* C) {
-  // Correct for bias in the sensor frame
-  Vector3 acc, omega;
+  // Correct for bias in the sensor frame. For GaussMarkovBias with in-window
+  // decay (gmDecay_, default) step k is debiased with beta_k * b_i,
+  // beta_k = exp(-t_k/tau), t_k = deltaTij_ (time *before* this step). beta = 1
+  // for ConstantBias or frozen GM. The same beta scales the bias Jacobian.
+  double beta_acc = 1.0, beta_omega = 1.0;
   if constexpr (std::is_same_v<Bias, imuBias::GaussMarkovBias>) {
-    // For GaussMarkovBias, the bias decays over the preintegration interval.
-    // At time t_k from start, bias = exp(-t_k/tau) * biasHat.
-    // deltaTij_ is the accumulated time *before* this step (not yet updated).
-    acc = biasHat_.correctAccelerometer(measuredAcc, deltaTij_);
-    omega = biasHat_.correctGyroscope(measuredOmega, deltaTij_);
-  } else {
-    acc = biasHat_.correctAccelerometer(measuredAcc);
-    omega = biasHat_.correctGyroscope(measuredOmega);
+    if (gmDecay_) {
+      beta_acc = std::exp(-deltaTij_ / biasHat_.tauAcc());
+      beta_omega = std::exp(-deltaTij_ / biasHat_.tauGyro());
+    }
   }
+  Vector3 acc = measuredAcc - beta_acc * biasHat_.accelerometer();
+  Vector3 omega = measuredOmega - beta_omega * biasHat_.gyroscope();
 
   // Possibly correct for sensor pose
   Matrix3 D_correctedAcc_acc, D_correctedAcc_omega, D_correctedOmega_omega;
@@ -143,24 +144,12 @@ void ManifoldPreintegrationT<Bias>::update(const Vector3& measuredAcc,
     const Matrix3 incrRt = incrR.transpose();
     const double dt22 = 0.5 * dt * dt;
     const Matrix3 dRij = oldRij.matrix();
-    if constexpr (std::is_same_v<Bias, imuBias::GaussMarkovBias>) {
-      const double t_k = deltaTij_ - dt;
-      const double ba = std::exp(-t_k / biasHat_.tauAcc());
-      const double bo = std::exp(-t_k / biasHat_.tauGyro());
-      delRdelBiasOmega_ =
-          incrRt * delRdelBiasOmega_ - bo * D_incrR_integratedOmega * dt;
-      delPdelBiasAcc_ += delVdelBiasAcc_ * dt - ba * dt22 * dRij;
-      delPdelBiasOmega_ += dt * delVdelBiasOmega_ + dt22 * D_acc_biasOmega;
-      delVdelBiasAcc_ += -ba * dRij * dt;
-      delVdelBiasOmega_ += D_acc_biasOmega * dt;
-    } else {
-      delRdelBiasOmega_ =
-          incrRt * delRdelBiasOmega_ - D_incrR_integratedOmega * dt;
-      delPdelBiasAcc_ += delVdelBiasAcc_ * dt - dt22 * dRij;
-      delPdelBiasOmega_ += dt * delVdelBiasOmega_ + dt22 * D_acc_biasOmega;
-      delVdelBiasAcc_ += -dRij * dt;
-      delVdelBiasOmega_ += D_acc_biasOmega * dt;
-    }
+    delRdelBiasOmega_ =
+        incrRt * delRdelBiasOmega_ - beta_omega * D_incrR_integratedOmega * dt;
+    delPdelBiasAcc_ += delVdelBiasAcc_ * dt - beta_acc * dt22 * dRij;
+    delPdelBiasOmega_ += dt * delVdelBiasOmega_ + dt22 * D_acc_biasOmega;
+    delVdelBiasAcc_ += -beta_acc * dRij * dt;
+    delVdelBiasOmega_ += D_acc_biasOmega * dt;
     return;
   }
 
@@ -205,29 +194,29 @@ void ManifoldPreintegrationT<Bias>::update(const Vector3& measuredAcc,
 
   // --- Bias Jacobian J = d(preint delta)/d(bias_i) via J <- A*J + G_bias.
   //     acc = meas - beta_acc*bias_acc, omega = meas - beta_omega*bias_omega, so
-  //     d(delta)/d(bias) = [-beta_acc*B | -beta_omega*C] (beta = 1 for
-  //     ConstantBias). Blocks are in NavState [R, t(P), v(V)] x [acc, gyro].
-  double beta_acc = 1.0, beta_omega = 1.0;
-  if constexpr (std::is_same_v<Bias, imuBias::GaussMarkovBias>) {
-    const double t_k = deltaTij_ - dt;
-    beta_acc = std::exp(-t_k / biasHat_.tauAcc());
-    beta_omega = std::exp(-t_k / biasHat_.tauGyro());
-  }
+  //     d(delta)/d(bias) = [-beta_acc*B | -beta_omega*C] (beta from the bias
+  //     correction above). Blocks are in NavState [R, t(P), v(V)] x [acc, gyro].
+  //     A, B, C live in the NavState tangent chart (component-wise: dp_abs =
+  //     R * dp_tan, same for v), but the stored p/v blocks are absolute, as
+  //     biasCorrectedDelta adds them to deltaPij()/deltaVij() directly. So
+  //     rotate p/v rows into the tangent at oldX, recurse, rotate back at newX.
+  const Matrix3 R_old = oldX.attitude().matrix();
+  const Matrix3 R_new = newX.attitude().matrix();
   Matrix96 J = Matrix96::Zero();
   J.block<3, 3>(0, 3) = delRdelBiasOmega_;
-  J.block<3, 3>(3, 0) = delPdelBiasAcc_;
-  J.block<3, 3>(3, 3) = delPdelBiasOmega_;
-  J.block<3, 3>(6, 0) = delVdelBiasAcc_;
-  J.block<3, 3>(6, 3) = delVdelBiasOmega_;
+  J.block<3, 3>(3, 0) = R_old.transpose() * delPdelBiasAcc_;
+  J.block<3, 3>(3, 3) = R_old.transpose() * delPdelBiasOmega_;
+  J.block<3, 3>(6, 0) = R_old.transpose() * delVdelBiasAcc_;
+  J.block<3, 3>(6, 3) = R_old.transpose() * delVdelBiasOmega_;
   Matrix96 Gb = Matrix96::Zero();
   Gb.block<9, 3>(0, 0) = -beta_acc * (*B);
   Gb.block<9, 3>(0, 3) = -beta_omega * (*C);
   J = (*A) * J + Gb;
   delRdelBiasOmega_ = J.block<3, 3>(0, 3);
-  delPdelBiasAcc_ = J.block<3, 3>(3, 0);
-  delPdelBiasOmega_ = J.block<3, 3>(3, 3);
-  delVdelBiasAcc_ = J.block<3, 3>(6, 0);
-  delVdelBiasOmega_ = J.block<3, 3>(6, 3);
+  delPdelBiasAcc_ = R_new * J.block<3, 3>(3, 0);
+  delPdelBiasOmega_ = R_new * J.block<3, 3>(3, 3);
+  delVdelBiasAcc_ = R_new * J.block<3, 3>(6, 0);
+  delVdelBiasOmega_ = R_new * J.block<3, 3>(6, 3);
 }
 
 //------------------------------------------------------------------------------

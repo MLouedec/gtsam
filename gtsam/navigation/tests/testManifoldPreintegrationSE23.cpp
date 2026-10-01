@@ -51,7 +51,7 @@ TEST(ManifoldPreintegrationSE23, PredictJacobians) {
   ManifoldPreintegrationSE23<> pim(testing::Params());
   testing::integrateMeasurements(measurements, &pim);
 
-  const ExtendedPose3 x1(Rot3::Yaw(0.2), Vector3(0.4, -0.1, 0.05),
+  const Se23 x1(Rot3::Yaw(0.2), Vector3(0.4, -0.1, 0.05),
                          Point3(0.3, -0.2, 0.1));
   const Bias bias(Vector3(0.01, -0.02, 0.005), Vector3(-0.001, 0.002, 0.003));
 
@@ -59,8 +59,8 @@ TEST(ManifoldPreintegrationSE23, PredictJacobians) {
   Matrix96 aH2;
   pim.predict(x1, bias, aH1, aH2);
 
-  std::function<ExtendedPose3(const ExtendedPose3&, const Bias&)> f =
-      [&](const ExtendedPose3& s, const Bias& b) {
+  std::function<Se23(const Se23&, const Bias&)> f =
+      [&](const Se23& s, const Bias& b) {
         return pim.predict(s, b);
       };
 
@@ -75,18 +75,18 @@ TEST(ManifoldPreintegrationSE23, ComputeErrorJacobians) {
   ManifoldPreintegrationSE23<> pim(testing::Params());
   testing::integrateMeasurements(measurements, &pim);
 
-  const ExtendedPose3 x1(Rot3::Yaw(0.2), Vector3(0.4, -0.1, 0.05),
+  const Se23 x1(Rot3::Yaw(0.2), Vector3(0.4, -0.1, 0.05),
                          Point3(0.3, -0.2, 0.1));
-  const ExtendedPose3 x2 = pim.predict(x1, Bias());
+  const Se23 x2 = pim.predict(x1, Bias());
   const Bias bias(Vector3(0.01, -0.02, 0.005), Vector3(-0.001, 0.002, 0.003));
 
   Matrix9 aH1, aH2;
   Matrix96 aH3;
   pim.computeError(x1, x2, bias, aH1, aH2, aH3);
 
-  std::function<Vector9(const ExtendedPose3&, const ExtendedPose3&,
+  std::function<Vector9(const Se23&, const Se23&,
                         const Bias&)>
-      f = [&](const ExtendedPose3& a, const ExtendedPose3& b, const Bias& c) {
+      f = [&](const Se23& a, const Se23& b, const Bias& c) {
         return pim.computeError(a, b, c, nullptr, nullptr, nullptr);
       };
 
@@ -112,14 +112,14 @@ TEST(ManifoldPreintegrationSE23, StraightLineZeroGravity) {
   for (int i = 0; i < N; ++i) pim.integrateMeasurement(acc, omega, dt);
 
   const double T = N * dt;  // 1.0 s
-  const ExtendedPose3 x1;   // identity
-  const ExtendedPose3 x2 = pim.predict(x1, Bias());
+  const Se23 x1;   // identity
+  const Se23 x2 = pim.predict(x1, Bias());
 
   EXPECT(assert_equal(Rot3(), x2.rotation(), 1e-9));
   // v = a * T = 1.0
-  EXPECT(assert_equal(Vector3(1.0, 0, 0), x2.velocity(), 1e-6));
+  EXPECT(assert_equal(Vector3(1.0, 0, 0), x2.x(0), 1e-6));
   // p = 0.5 * a * T^2 = 0.5
-  EXPECT(assert_equal(Point3(0.5, 0, 0), x2.position(), 1e-6));
+  EXPECT(assert_equal(Point3(0.5, 0, 0), x2.x(1), 1e-6));
   EXPECT_DOUBLES_EQUAL(T, pim.deltaTij(), 1e-9);
 }
 
@@ -130,10 +130,10 @@ TEST(ManifoldPreintegrationSE23, ZeroResidualAtPrediction) {
   ManifoldPreintegrationSE23<> pim(testing::Params());
   testing::integrateMeasurements(measurements, &pim);
 
-  const ExtendedPose3 x1(Rot3::Ypr(0.1, -0.2, 0.3), Vector3(0.5, 0.1, -0.2),
+  const Se23 x1(Rot3::Ypr(0.1, -0.2, 0.3), Vector3(0.5, 0.1, -0.2),
                          Point3(1.0, 2.0, -0.5));
   const Bias bias;
-  const ExtendedPose3 x2 = pim.predict(x1, bias);
+  const Se23 x2 = pim.predict(x1, bias);
 
   const Vector9 e =
       pim.computeError(x1, x2, bias, nullptr, nullptr, nullptr);
@@ -165,7 +165,7 @@ Vector9 reintegratedLog(const testing::SomeMeasurements& ms, const Bias& b,
                         SE23IncrementModel model) {
   ManifoldPreintegrationSE23<> pim(testing::Params(), b, model);
   testing::integrateMeasurements(ms, &pim);
-  return ExtendedPose3::Logmap(pim.deltaXij());
+  return Se23::Logmap(pim.deltaXij());
 }
 
 // Returns {numeric FD, analytic J_bias} for comparison inside a TEST.
@@ -198,6 +198,56 @@ TEST(ManifoldPreintegrationSE23, BiasJacobianVsReintegration_Full) {
 }
 
 /* ************************************************************************* */
+// GaussMarkovBias: the analytic bias Jacobian must match re-integration for
+// both in-window decay settings (on: step k debiased with exp(-t_k/tau) * b_i;
+// off: frozen b_i). tau is short vs the ~1 s window so the decay matters.
+namespace {
+using GMBias = imuBias::GaussMarkovBias;
+const GMBias kGMBiasHat(Vector3(0.01, -0.02, 0.005),
+                        Vector3(-0.003, 0.004, 0.002), 0.5, 0.7);
+
+ManifoldPreintegrationSE23<GMBias> gmPim(const GMBias& b, bool decay) {
+  ManifoldPreintegrationSE23<GMBias> pim(testing::Params(), b,
+                                         SE23IncrementModel::ConstantBodyImu);
+  pim.setGMInWindowDecay(decay);
+  testing::integrateMeasurements(testing::SomeMeasurements(), &pim);
+  return pim;
+}
+
+std::pair<Matrix, Matrix> gmBiasJacobianNumericVsAnalytic(bool decay) {
+  Matrix96 H;
+  gmPim(kGMBiasHat, decay).biasCorrectedDelta(kGMBiasHat, H);
+  std::function<Vector9(const GMBias&)> f = [&](const GMBias& b) {
+    return Se23::Logmap(gmPim(b, decay).deltaXij());
+  };
+  return {numericalDerivative11<Vector9, GMBias>(f, kGMBiasHat), Matrix(H)};
+}
+}  // namespace
+
+TEST(ManifoldPreintegrationSE23, GMBiasJacobianVsReintegration_Decay) {
+  auto r = gmBiasJacobianNumericVsAnalytic(true);
+  EXPECT(assert_equal(r.first, r.second, 1e-5));
+}
+
+TEST(ManifoldPreintegrationSE23, GMBiasJacobianVsReintegration_Frozen) {
+  auto r = gmBiasJacobianNumericVsAnalytic(false);
+  EXPECT(assert_equal(r.first, r.second, 1e-5));
+}
+
+// Decay on vs off must give different means, and decay with a huge tau must
+// reduce to the frozen mean.
+TEST(ManifoldPreintegrationSE23, GMDecayMean) {
+  const Vector9 on = Se23::Logmap(gmPim(kGMBiasHat, true).deltaXij());
+  const Vector9 off = Se23::Logmap(gmPim(kGMBiasHat, false).deltaXij());
+  EXPECT((on - off).norm() > 1e-4);
+  const GMBias slow(kGMBiasHat.accelerometer(), kGMBiasHat.gyroscope(), 1e12,
+                    1e12);
+  EXPECT(assert_equal(Se23::Logmap(gmPim(slow, false).deltaXij()),
+                      Se23::Logmap(gmPim(slow, true).deltaXij()),
+                      1e-9));
+}
+
+/* ************************************************************************* */
 // The two increment models must agree exactly when omega == 0 (J_l(0)=I,
 // C_hat(0,dt)=dt^2/2 I), a sanity check on the ConstantBodyImu math.
 TEST(ManifoldPreintegrationSE23, SimpleFullAgreeZeroOmega) {
@@ -220,15 +270,15 @@ TEST(ManifoldPreintegrationSE23, FullModelPredictJacobians) {
                                    SE23IncrementModel::ConstantBodyImu);
   testing::integrateMeasurements(measurements, &pim);
 
-  const ExtendedPose3 x1(Rot3::Yaw(0.2), Vector3(0.4, -0.1, 0.05),
+  const Se23 x1(Rot3::Yaw(0.2), Vector3(0.4, -0.1, 0.05),
                          Point3(0.3, -0.2, 0.1));
   const Bias bias(Vector3(0.01, -0.02, 0.005), Vector3(-0.001, 0.002, 0.003));
 
   Matrix9 aH1;
   Matrix96 aH2;
   pim.predict(x1, bias, aH1, aH2);
-  std::function<ExtendedPose3(const ExtendedPose3&, const Bias&)> f =
-      [&](const ExtendedPose3& s, const Bias& b) { return pim.predict(s, b); };
+  std::function<Se23(const Se23&, const Bias&)> f =
+      [&](const Se23& s, const Bias& b) { return pim.predict(s, b); };
   EXPECT(assert_equal(numericalDerivative21(f, x1, bias), aH1, 1e-5));
   EXPECT(assert_equal(numericalDerivative22(f, x1, bias), aH2, 1e-5));
 }
@@ -249,7 +299,7 @@ TEST(ManifoldPreintegrationSE23, FullModelReproducesConstantBodyTruth) {
   const int N = 100;
   const double T = N * dt;
   for (int i = 0; i < N; ++i) pim.integrateMeasurement(acc, omega, dt);
-  const ExtendedPose3 x = pim.predict(ExtendedPose3(), Bias());
+  const Se23 x = pim.predict(Se23(), Bias());
 
   // v(t) = int_0^t R(s) acc ds, p(t) = int_0^t v ds, R(t) = Exp(omega t).
   const int Nf = 100000;
@@ -261,8 +311,8 @@ TEST(ManifoldPreintegrationSE23, FullModelReproducesConstantBodyTruth) {
     v_t += Rf * h;
   }
   EXPECT(assert_equal(Rot3::Expmap(omega * T), x.rotation(), 1e-9));
-  EXPECT(assert_equal(v_t, x.velocity(), 1e-4));
-  EXPECT(assert_equal(Point3(p_t), x.position(), 1e-4));
+  EXPECT(assert_equal(v_t, x.x(0), 1e-4));
+  EXPECT(assert_equal(Point3(p_t), x.x(1), 1e-4));
 }
 
 /* ************************************************************************* */
@@ -282,7 +332,7 @@ TEST(ManifoldPreintegrationSE23, FullModelBiasJacobianLargeOmega) {
   Matrix96 H;
   pim.biasCorrectedDelta(biasHat, H);
   std::function<Vector9(const Bias&)> f = [&](const Bias& b) {
-    return ExtendedPose3::Logmap(build(b).deltaXij());
+    return Se23::Logmap(build(b).deltaXij());
   };
   EXPECT(assert_equal(numericalDerivative11<Vector9, Bias>(f, biasHat),
                       Matrix(H), 1e-5));

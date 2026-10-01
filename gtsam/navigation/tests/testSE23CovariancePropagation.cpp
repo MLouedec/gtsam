@@ -10,6 +10,7 @@
  * @brief   Continuous F_c / Q~ assembly and Q_d methods (Ours vs Van Loan).
  */
 
+#include <gtsam/base/MatrixConstants.h>
 #include <gtsam/navigation/SE23CovariancePropagation.h>
 
 #include <CppUnitLite/TestHarness.h>

@@ -226,17 +226,20 @@ void ManifoldPreintegrationSE23<Bias>::update(
     const Vector3& measuredAcc, const Vector3& measuredOmega, const double dt,
     Matrix9* A, Matrix93* B, Matrix93* C, Vector3* correctedAcc,
     Vector3* correctedOmega) {
-  // 1. Correct bias to obtain (f_hat, w_hat) using the FROZEN window-start bias
-  //    b_i (= biasHat_). We deliberately use the no-dt correct* overloads for
-  //    BOTH bias types, i.e. beta = 1: the IMU is debiased with b_i, never with
-  //    a mid-window mean-reverted bias. (GM mean-reversion of the *covariance*
-  //    and of the between-states residual is handled elsewhere; it must not
-  //    enter the in-window correction.)
-  //    ALT (disabled): mid-window GM mean reversion, beta = exp(-deltaTij_/tau):
-  //      acc   = biasHat_.correctAccelerometer(measuredAcc, deltaTij_);
-  //      omega = biasHat_.correctGyroscope(measuredOmega, deltaTij_);
-  Vector3 acc = biasHat_.correctAccelerometer(measuredAcc);
-  Vector3 omega = biasHat_.correctGyroscope(measuredOmega);
+  // 1. Correct bias to obtain (f_hat, w_hat). For GaussMarkovBias with
+  //    in-window decay (gmDecay_, default) step k is debiased with the GM mean
+  //    beta_k * b_i, beta_k = exp(-t_k/tau), t_k = deltaTij_ (time *before*
+  //    this step) -- same as the SE3 path. beta = 1 for ConstantBias or frozen
+  //    GM (setGMInWindowDecay(false)). The same beta scales the bias Jacobian.
+  double beta_acc = 1.0, beta_omega = 1.0;
+  if constexpr (std::is_same_v<Bias, imuBias::GaussMarkovBias>) {
+    if (gmDecay_) {
+      beta_acc = std::exp(-deltaTij_ / biasHat_.tauAcc());
+      beta_omega = std::exp(-deltaTij_ / biasHat_.tauGyro());
+    }
+  }
+  Vector3 acc = measuredAcc - beta_acc * biasHat_.accelerometer();
+  Vector3 omega = measuredOmega - beta_omega * biasHat_.gyroscope();
 
   // 2. Possibly correct for sensor pose.
   Matrix3 D_correctedAcc_acc, D_correctedAcc_omega, D_correctedOmega_omega;
@@ -314,7 +317,7 @@ void ManifoldPreintegrationSE23<Bias>::update(
   }
 
   // 5. Propagate the bias Jacobian J = d(preint delta)/d(b_i) via the full
-  //    transition, at beta = 1 (frozen b_i, ref §7a):  J_{k+1} = A J_k + G.
+  //    transition (ref §7a):  J_{k+1} = A J_k + G diag(beta_acc, beta_omega).
   //    Assembled/written back through the 5 stored 3x3 blocks (rows theta, nu,
   //    rho ; cols acc, gyro). The theta/acc block is provably zero and stays 0.
   Matrix96 Jbias = Matrix96::Zero();
@@ -324,7 +327,11 @@ void ManifoldPreintegrationSE23<Bias>::update(
   Jbias.block<3, 3>(6, 0) = delRHOdelBiasAcc_;
   Jbias.block<3, 3>(6, 3) = delRHOdelBiasOmega_;
 
-  Jbias = (*A) * Jbias + G;  // G's sign already encodes d/d(bias) at beta=1
+  // G's sign already encodes d/d(bias); beta scales it per bias column.
+  Matrix96 Gb = G;
+  Gb.leftCols<3>() *= beta_acc;
+  Gb.rightCols<3>() *= beta_omega;
+  Jbias = (*A) * Jbias + Gb;
 
   delRdelBiasOmega_ = Jbias.block<3, 3>(0, 3);
   delNUdelBiasAcc_ = Jbias.block<3, 3>(3, 0);

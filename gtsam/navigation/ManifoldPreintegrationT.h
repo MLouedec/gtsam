@@ -53,6 +53,11 @@ class GTSAM_EXPORT ManifoldPreintegrationT : public PreintegrationBaseT<Bias> {
   LegacyIncrement increment_ = LegacyIncrement::ConstantBodyImu;
   void setLegacyIncrement(LegacyIncrement m) { increment_ = m; }
 
+  /// GaussMarkovBias only: in-window bias decay. true (default) debiases step
+  /// k with exp(-t_k/tau) * b_i; false keeps b_i frozen over the window.
+  bool gmDecay_ = true;
+  void setGMInWindowDecay(bool on) { gmDecay_ = on; }
+
   /**
    * Pre-integrated navigation state, from frame i to frame
    * j Note: relative position does not take into account

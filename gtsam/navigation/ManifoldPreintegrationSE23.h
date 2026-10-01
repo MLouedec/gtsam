@@ -53,6 +53,11 @@ class GTSAM_EXPORT ManifoldPreintegrationSE23
   /// Single-step increment model (mean + matched G_j). Default: cheapest.
   SE23IncrementModel incrementModel_ = SE23IncrementModel::SimpleGlobalAcc;
 
+  /// GaussMarkovBias only: in-window bias decay. true (default) debiases step
+  /// k with exp(-t_k/tau) * b_i; false keeps b_i frozen over the window.
+  bool gmDecay_ = true;
+  void setGMInWindowDecay(bool on) { gmDecay_ = on; }
+
   /// Preintegrated navigation state on SE_2(3), from i to j.
   Se23 deltaXij_;
 

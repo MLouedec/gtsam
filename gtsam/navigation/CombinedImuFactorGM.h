@@ -390,24 +390,14 @@ void PreintegratedCombinedMeasurementsGMT<PreintegrationType, BiasType>::
   F.block<9, 9>(0, 0) = A;
 
   // Off-diagonal blocks: NavState dependence on bias.
-  // B and C are Jacobians w.r.t. corrected measurements; to get Jacobians
-  // w.r.t. bias we chain through the bias correction:
-  //   ConstantBias:    d(corrected)/d(bias) = -I  (sign cancels in F*P*F^T)
-  //   GaussMarkovBias: d(corrected)/d(bias) = -beta*I  (beta matters!)
-  if constexpr (std::is_same_v<BiasType, imuBias::GaussMarkovBias>) {
-    // deltaTij_ was already incremented by dt in update(), so subtract dt
-    // to get the elapsed time at the start of this measurement step.
-    const double t_k = this->deltaTij_ - dt;
-    const double beta_acc = std::exp(-t_k / this->biasHat_.tauAcc());
-    const double beta_omega = std::exp(-t_k / this->biasHat_.tauGyro());
-    F.block<3, 3>(0, 12) = beta_omega * theta_H_omega;
-    F.block<3, 3>(3, 9) = beta_acc * pos_H_acc;
-    F.block<3, 3>(6, 9) = beta_acc * vel_H_acc;
-  } else {
-    F.block<3, 3>(0, 12) = theta_H_omega;
-    F.block<3, 3>(3, 9) = pos_H_acc;
-    F.block<3, 3>(6, 9) = vel_H_acc;
-  }
+  // B and C are Jacobians w.r.t. corrected measurements; the bias rows of the
+  // covariance hold the CURRENT bias error (its GM decay is applied by the bias
+  // block transition below), so d(corrected)/d(bias) = -I for both bias types
+  // (sign cancels in F*P*F^T). Scaling by beta here as well would apply the GM
+  // decay twice. Matches the SE_2(3) path (CombinedImuFactor2).
+  F.block<3, 3>(0, 12) = theta_H_omega;
+  F.block<3, 3>(3, 9) = pos_H_acc;
+  F.block<3, 3>(6, 9) = vel_H_acc;
 
   // Bias state transition:
   //   ConstantBias  (random walk):   I_6x6

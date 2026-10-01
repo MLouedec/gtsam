@@ -7,7 +7,7 @@
 
 /**
  * @file    testCombinedImuFactor2.cpp
- * @brief   Unit tests for CombinedImuFactor2 (SE_2(3), ExtendedPose3, bias-templated).
+ * @brief   Unit tests for CombinedImuFactor2 (SE_2(3), Se23, bias-templated).
  */
 
 #include <gtsam/base/numericalDerivative.h>
@@ -91,10 +91,10 @@ TEST(CombinedImuFactor2, ZeroResidualAtPrediction) {
   testing::SomeMeasurements measurements;
   for (const auto& m : measurements) pim.integrateMeasurement(m.acc, m.gyro, m.dt);
 
-  const ExtendedPose3 x1(Rot3::Ypr(0.1, -0.2, 0.3), Vector3(0.3, 0.1, -0.05),
+  const Se23 x1(Rot3::Ypr(0.1, -0.2, 0.3), Vector3(0.3, 0.1, -0.05),
                          Point3(0.5, -0.3, 0.2));
   const Bias bias;
-  const ExtendedPose3 x2 = pim.predict(x1, bias);
+  const Se23 x2 = pim.predict(x1, bias);
 
   Factor_CB factor(X(1), X(2), B(1), B(2), pim);
   const Vector r = factor.evaluateError(x1, x2, bias, bias, nullptr, nullptr,
@@ -113,9 +113,9 @@ TEST(CombinedImuFactor2, JacobiansConstantBias) {
 
   Factor_CB factor(X(1), X(2), B(1), B(2), pim);
 
-  const ExtendedPose3 x1(Rot3::Yaw(0.15), Vector3(0.2, -0.1, 0.05),
+  const Se23 x1(Rot3::Yaw(0.15), Vector3(0.2, -0.1, 0.05),
                          Point3(0.5, -0.2, 0.1));
-  const ExtendedPose3 x2 = pim.predict(x1, Bias());
+  const Se23 x2 = pim.predict(x1, Bias());
   const Bias bias_i(Vector3(0.01, -0.02, 0.005),
                     Vector3(-0.001, 0.002, 0.003));
   const Bias bias_j(Vector3(0.015, -0.018, 0.004),
@@ -124,27 +124,27 @@ TEST(CombinedImuFactor2, JacobiansConstantBias) {
   Matrix H1, H2, H3, H4;
   factor.evaluateError(x1, x2, bias_i, bias_j, &H1, &H2, &H3, &H4);
 
-  std::function<Vector(const ExtendedPose3&, const ExtendedPose3&, const Bias&,
+  std::function<Vector(const Se23&, const Se23&, const Bias&,
                        const Bias&)>
-      f = [&](const ExtendedPose3& a, const ExtendedPose3& b, const Bias& c,
+      f = [&](const Se23& a, const Se23& b, const Bias& c,
               const Bias& d) {
         return factor.evaluateError(a, b, c, d, nullptr, nullptr, nullptr,
                                     nullptr);
       };
 
-  EXPECT(assert_equal(numericalDerivative41<Vector, ExtendedPose3, ExtendedPose3,
+  EXPECT(assert_equal(numericalDerivative41<Vector, Se23, Se23,
                                             Bias, Bias>(f, x1, x2, bias_i,
                                                         bias_j),
                       H1, 1e-4));
-  EXPECT(assert_equal(numericalDerivative42<Vector, ExtendedPose3, ExtendedPose3,
+  EXPECT(assert_equal(numericalDerivative42<Vector, Se23, Se23,
                                             Bias, Bias>(f, x1, x2, bias_i,
                                                         bias_j),
                       H2, 1e-4));
-  EXPECT(assert_equal(numericalDerivative43<Vector, ExtendedPose3, ExtendedPose3,
+  EXPECT(assert_equal(numericalDerivative43<Vector, Se23, Se23,
                                             Bias, Bias>(f, x1, x2, bias_i,
                                                         bias_j),
                       H3, 1e-4));
-  EXPECT(assert_equal(numericalDerivative44<Vector, ExtendedPose3, ExtendedPose3,
+  EXPECT(assert_equal(numericalDerivative44<Vector, Se23, Se23,
                                             Bias, Bias>(f, x1, x2, bias_i,
                                                         bias_j),
                       H4, 1e-4));
@@ -162,9 +162,9 @@ TEST(CombinedImuFactor2, JacobiansGaussMarkovBias) {
 
   Factor_GM factor(X(1), X(2), B(1), B(2), pim);
 
-  const ExtendedPose3 x1(Rot3::Yaw(0.1), Vector3(0.2, -0.1, 0.0),
+  const Se23 x1(Rot3::Yaw(0.1), Vector3(0.2, -0.1, 0.0),
                          Point3(0.3, -0.1, 0.05));
-  const ExtendedPose3 x2 = pim.predict(x1, biasHat);
+  const Se23 x2 = pim.predict(x1, biasHat);
   const GMBias bias_i(Vector3(0.01, -0.02, 0.005),
                       Vector3(-0.001, 0.002, 0.003), tauAcc, tauGyro);
   const GMBias bias_j(Vector3(0.012, -0.018, 0.006),
@@ -173,27 +173,27 @@ TEST(CombinedImuFactor2, JacobiansGaussMarkovBias) {
   Matrix H1, H2, H3, H4;
   factor.evaluateError(x1, x2, bias_i, bias_j, &H1, &H2, &H3, &H4);
 
-  std::function<Vector(const ExtendedPose3&, const ExtendedPose3&, const GMBias&,
+  std::function<Vector(const Se23&, const Se23&, const GMBias&,
                        const GMBias&)>
-      f = [&](const ExtendedPose3& a, const ExtendedPose3& b,
+      f = [&](const Se23& a, const Se23& b,
               const GMBias& c, const GMBias& d) {
         return factor.evaluateError(a, b, c, d, nullptr, nullptr, nullptr,
                                     nullptr);
       };
 
-  EXPECT(assert_equal(numericalDerivative41<Vector, ExtendedPose3, ExtendedPose3,
+  EXPECT(assert_equal(numericalDerivative41<Vector, Se23, Se23,
                                             GMBias, GMBias>(f, x1, x2, bias_i,
                                                             bias_j),
                       H1, 1e-4));
-  EXPECT(assert_equal(numericalDerivative42<Vector, ExtendedPose3, ExtendedPose3,
+  EXPECT(assert_equal(numericalDerivative42<Vector, Se23, Se23,
                                             GMBias, GMBias>(f, x1, x2, bias_i,
                                                             bias_j),
                       H2, 1e-4));
-  EXPECT(assert_equal(numericalDerivative43<Vector, ExtendedPose3, ExtendedPose3,
+  EXPECT(assert_equal(numericalDerivative43<Vector, Se23, Se23,
                                             GMBias, GMBias>(f, x1, x2, bias_i,
                                                             bias_j),
                       H3, 1e-4));
-  EXPECT(assert_equal(numericalDerivative44<Vector, ExtendedPose3, ExtendedPose3,
+  EXPECT(assert_equal(numericalDerivative44<Vector, Se23, Se23,
                                             GMBias, GMBias>(f, x1, x2, bias_i,
                                                             bias_j),
                       H4, 1e-4));

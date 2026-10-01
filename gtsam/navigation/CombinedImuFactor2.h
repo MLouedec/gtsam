@@ -21,6 +21,7 @@
 #include <gtsam/navigation/ManifoldPreintegrationSE23.h>
 #include <gtsam/navigation/PreintegrationCombinedParamsT.h>
 #include <gtsam/navigation/SE23CovariancePropagation.h>
+#include <gtsam/nonlinear/NoiseModelFactorN.h>
 #include <gtsam/nonlinear/NonlinearFactor.h>
 
 #include <ostream>
@@ -183,15 +184,12 @@ void PreintegratedCombinedMeasurements2T<PreintegrationType, BiasType>::
   A_i.setZero();
   A_i.block<9, 9>(0, 0) = A;
 
-  // Off-diagonal pose<->bias coupling. d(corrected)/d(bias) = -I (beta = 1),
-  // because the IMU is debiased with the FROZEN window-start bias b_i for BOTH
-  // bias types (see ManifoldPreintegrationSE23::update). The off-diag gets the
-  // *positive* measurement Jacobian (sign cancels via A_i P A_i^T). The
-  // bias-block self-decay (GM mean reversion) lives in A_i.block<6,6>(9,9)
-  // below, NOT here.
-  // ALT (disabled): mid-window GM mean reversion scaled the coupling by
-  //   beta_* = exp(-(deltaTij_-dt)/tau_*):
-  //     A_i.block<3,3>(0,12) = beta_omega * theta_H_omega; etc.
+  // Off-diagonal pose<->bias coupling. The bias rows of the covariance hold the
+  // CURRENT bias error, whose GM decay is applied by the bias-block transition
+  // A_i.block<6,6>(9,9) below, so d(corrected)/d(bias) = -I for both bias types
+  // and either in-window decay setting (scaling by beta here as well would
+  // apply the decay twice). The off-diag gets the *positive* measurement
+  // Jacobian (sign cancels via A_i P A_i^T).
   A_i.block<3, 3>(0, 12) = theta_H_omega;  // theta <- b_gyro
   A_i.block<3, 3>(3, 9) = nu_H_acc;        // nu    <- b_acc
   A_i.block<3, 3>(6, 9) = rho_H_acc;       // rho   <- b_acc

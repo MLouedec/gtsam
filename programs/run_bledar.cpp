@@ -105,6 +105,9 @@ struct Options {
   // (default, matches SE_2(3)), true = GTSAM's native NavState::update
   // (global-acc). Ignored for --preint se23.
   bool legacy_use_gtsam_increment = false;
+  // GM in-window bias decay (both preints): true = debias step k with
+  // exp(-t_k/tau) * b_i (default), false = frozen b_i. Ignored for --bias cb.
+  bool gm_decay = true;
 };
 
 static void print_usage(const char* prog) {
@@ -127,6 +130,7 @@ static void print_usage(const char* prog) {
       << "  --legacy-increment {gtsam|full}  se3 increment: gtsam = native\n"
       << "                              NavState::update, full = piecewise\n"
       << "                              constant-body-IMU (default full)\n"
+      << "  --gm-decay {on|off}         gm in-window bias decay (default on)\n"
       << "  --base-path <path>          per-sensor CSV folder\n"
       << "  --output-dir <path>         result CSV directory\n"
       << "  --acc-noise-scaling <s>     (default 33)\n"
@@ -210,6 +214,12 @@ static bool parse_args(int argc, char** argv, Options& o) {
         std::cerr << "Unknown --legacy-increment " << v << "\n";
         return false;
       }
+    } else if (a == "--gm-decay") {
+      if (!need(i, "--gm-decay")) return false;
+      std::string v = argv[++i];
+      if (v == "on") o.gm_decay = true;
+      else if (v == "off") o.gm_decay = false;
+      else { std::cerr << "Unknown --gm-decay " << v << "\n"; return false; }
     } else if (a == "--base-path") {
       if (!need(i, "--base-path")) return false;
       o.base_path = argv[++i];
@@ -599,6 +609,7 @@ void run_estimation(const Data& d, const Options& opts) {
         p, prior_bias, Eigen::Matrix<double, 15, 15>::Zero(),
         opts.legacy_use_gtsam_increment);
   }
+  preintegrated->setGMInWindowDecay(opts.gm_decay);
   StateType prev_state = [&] {
     if constexpr (UseSE23) return gtsam::Se23(R0, v0, p0);
     else return gtsam::NavState(pose0, v0);

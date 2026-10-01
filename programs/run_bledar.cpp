@@ -95,11 +95,15 @@ struct Options {
   double bias_tau_acc = 3600.0;
   double bias_tau_gyro = 3600.0;
 
-  // SE_2(3)-only knobs (ignored for --preint se3).
-  gtsam::SE23CovarianceMethod cov_method =
-      gtsam::SE23CovarianceMethod::Brossard;
+  // SE_2(3)-only knobs (ignored for --preint se3). Default = Our-full (4th-order
+  // series covariance + piecewise constant-body-IMU increment), as in the sim.
+  gtsam::SE23CovarianceMethod cov_method = gtsam::SE23CovarianceMethod::Ours;
   gtsam::SE23IncrementModel increment =
-      gtsam::SE23IncrementModel::SimpleGlobalAcc;
+      gtsam::SE23IncrementModel::ConstantBodyImu;
+  // Legacy (SE3/NavState) increment: false = piecewise constant-body-IMU
+  // (default, matches SE_2(3)), true = GTSAM's native NavState::update
+  // (global-acc). Ignored for --preint se23.
+  bool legacy_use_gtsam_increment = false;
 };
 
 static void print_usage(const char* prog) {
@@ -116,8 +120,11 @@ static void print_usage(const char* prog) {
       << "                              then switch to pars/uwb (default 400)\n"
       << "  --robust {none|gm|tukey}    robust kernel (default none)\n"
       << "  --covmethod {brossard|ours|vanloan}  se23 process-noise method\n"
-      << "                              (default brossard)\n"
-      << "  --increment {simple|full}   se23 increment model (default simple)\n"
+      << "                              (default ours)\n"
+      << "  --increment {simple|full}   se23 increment model (default full)\n"
+      << "  --legacy-increment {gtsam|full}  se3 increment: gtsam = native\n"
+      << "                              NavState::update, full = piecewise\n"
+      << "                              constant-body-IMU (default full)\n"
       << "  --base-path <path>          per-sensor CSV folder\n"
       << "  --output-dir <path>         result CSV directory\n"
       << "  --acc-noise-scaling <s>     (default 33)\n"
@@ -192,6 +199,15 @@ static bool parse_args(int argc, char** argv, Options& o) {
       else if (v == "full")
         o.increment = gtsam::SE23IncrementModel::ConstantBodyImu;
       else { std::cerr << "Unknown --increment " << v << "\n"; return false; }
+    } else if (a == "--legacy-increment") {
+      if (!need(i, "--legacy-increment")) return false;
+      std::string v = argv[++i];
+      if (v == "full") o.legacy_use_gtsam_increment = false;
+      else if (v == "gtsam") o.legacy_use_gtsam_increment = true;
+      else {
+        std::cerr << "Unknown --legacy-increment " << v << "\n";
+        return false;
+      }
     } else if (a == "--base-path") {
       if (!need(i, "--base-path")) return false;
       o.base_path = argv[++i];
@@ -570,7 +586,9 @@ void run_estimation(const Data& d, const Options& opts) {
         p, prior_bias, Eigen::Matrix<double, 15, 15>::Zero(), opts.increment,
         opts.cov_method);
   } else {
-    preintegrated = std::make_shared<PIM>(p, prior_bias);
+    preintegrated = std::make_shared<PIM>(
+        p, prior_bias, Eigen::Matrix<double, 15, 15>::Zero(),
+        opts.legacy_use_gtsam_increment);
   }
   StateType prev_state = [&] {
     if constexpr (UseSE23) return gtsam::Se23(R0, v0, p0);

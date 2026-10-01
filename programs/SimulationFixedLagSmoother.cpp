@@ -117,11 +117,11 @@ struct Options {
   bool init_from_truth = false;  // When true, initialise state from truth
                                  // (auto-enabled for Aiding::None).
 
-  // SE_2(3)-only knobs (ignored for --preint legacy).
-  gtsam::SE23CovarianceMethod cov_method =
-      gtsam::SE23CovarianceMethod::Brossard;
+  // SE_2(3)-only knobs (ignored for --preint legacy). Default = Our-full
+  // (4th-order series covariance + piecewise constant-body-IMU increment).
+  gtsam::SE23CovarianceMethod cov_method = gtsam::SE23CovarianceMethod::Ours;
   gtsam::SE23IncrementModel increment =
-      gtsam::SE23IncrementModel::SimpleGlobalAcc;
+      gtsam::SE23IncrementModel::ConstantBodyImu;
   // Legacy (SE3/NavState) increment: false = piecewise constant-body-IMU
   // (default, matches SE_2(3); DR reconstructs to 0 on *_exact), true = GTSAM's
   // native NavState::update (global-acc). Ignored for --preint se23.
@@ -921,8 +921,8 @@ void print_usage(const char* prog) {
       << "                           none = IMU-only; auto-enables init\n"
       << "                                  from ground truth\n"
       << "  --covmethod {brossard|ours|vanloan}  se23 process-noise method\n"
-      << "                           (default: brossard)\n"
-      << "  --increment {simple|full}  se23 increment model (default: simple)\n"
+      << "                           (default: ours)\n"
+      << "  --increment {simple|full}  se23 increment model (default: full)\n"
       << "  --legacy-increment {gtsam|full}  SE3/NavState increment: gtsam =\n"
       << "                             native NavState::update, full = piecewise\n"
       << "                             constant-body-IMU (default: full)\n"

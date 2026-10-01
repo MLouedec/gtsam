@@ -84,7 +84,9 @@ struct Options {
 
   double acc_noise_scaling = 33.0;
   double gyro_noise_scaling = 100.0;
-  double bias_scaling = 1.0;  // datasheet-true stationary bias sigma
+  // Inflate the datasheet-true stationary bias sigma, per sensor (1 = true).
+  double bias_scaling_acc = 1.0;
+  double bias_scaling_gyro = 1.0;
   bool use_music = false;
 
   // Gauss-Markov bias correlation times [s], independent per channel. GM uses
@@ -135,8 +137,10 @@ static void print_usage(const char* prog) {
       << "  --output-dir <path>         result CSV directory\n"
       << "  --acc-noise-scaling <s>     (default 33)\n"
       << "  --gyro-noise-scaling <s>    (default 100)\n"
-      << "  --bias-scaling <s>          inflate datasheet bias sigma "
-         "(default 1)\n"
+      << "  --bias-scaling <s>          inflate datasheet bias sigma, acc and\n"
+      << "                              gyro alike (default 1)\n"
+      << "  --bias-scaling-acc <s>      accel bias sigma only (default 1)\n"
+      << "  --bias-scaling-gyro <s>     gyro bias sigma only (default 1)\n"
       << "  --use-music                 use the _root dataset variant\n"
       << "  -h, --help\n";
 }
@@ -236,7 +240,13 @@ static bool parse_args(int argc, char** argv, Options& o) {
       o.gyro_noise_scaling = std::stod(argv[++i]);
     } else if (a == "--bias-scaling") {
       if (!need(i, "--bias-scaling")) return false;
-      o.bias_scaling = std::stod(argv[++i]);
+      o.bias_scaling_acc = o.bias_scaling_gyro = std::stod(argv[++i]);
+    } else if (a == "--bias-scaling-acc") {
+      if (!need(i, "--bias-scaling-acc")) return false;
+      o.bias_scaling_acc = std::stod(argv[++i]);
+    } else if (a == "--bias-scaling-gyro") {
+      if (!need(i, "--bias-scaling-gyro")) return false;
+      o.bias_scaling_gyro = std::stod(argv[++i]);
     } else if (a == "--use-music") {
       o.use_music = true;
     } else {
@@ -464,11 +474,11 @@ void run_estimation(const Data& d, const Options& opts) {
   const double q_v = std::pow(opts.acc_noise_scaling * vrw / 60.0, 2.0);
   const double q_o =
       std::pow((opts.gyro_noise_scaling * arw / 60.0) * deg2rad(1.0), 2.0);
-  // Stationary variance P_inf = sigma^2; bias_scaling inflates the stationary
-  // sigma (so variance scales by bias_scaling^2). With the datasheet sigma
-  // above, the physically-true run is --bias-scaling 1.
-  const double P_inf_v = std::pow(opts.bias_scaling, 2.0) * sig2_ba;
-  const double P_inf_o = std::pow(opts.bias_scaling, 2.0) * sig2_bg;
+  // Stationary variance P_inf = sigma^2; bias_scaling_{acc,gyro} inflate the
+  // stationary sigma per sensor (so variance scales by scaling^2). With the
+  // datasheet sigma above, the physically-true run is --bias-scaling 1.
+  const double P_inf_v = std::pow(opts.bias_scaling_acc, 2.0) * sig2_ba;
+  const double P_inf_o = std::pow(opts.bias_scaling_gyro, 2.0) * sig2_bg;
   // Driving PSD. GM: q = 2 P_inf / tau. Wiener (ConstantBias): the PSD whose
   // t_eval-integral equals the GM variance at t_eval, so both bias models
   // share the same covariance at t = t_eval seconds (as in the simulator).

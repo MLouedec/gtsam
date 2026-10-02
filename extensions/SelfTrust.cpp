@@ -35,9 +35,22 @@ double SelfTrust::get(const std::string& sensor) const {
   return (g + 1.0) / (g + b + 2.0);
 }
 
-std::map<std::string, double> SelfTrust::snapshot() const {
-  std::map<std::string, double> out;
-  for (const auto& kv : good_) out[kv.first] = get(kv.first);
+Opinion SelfTrust::opinion(const std::string& sensor) const {
+  auto it = good_.find(sensor);
+  if (it == good_.end()) return Opinion{0.0, 0.0, 1.0};
+  double a = it->second;
+  double b = bad_.at(sensor);
+  double denom = a + b + 2.0;
+  Opinion op;
+  op.belief = a / denom;
+  op.disbelief = b / denom;
+  op.uncertainty = 2.0 / denom;
+  return op;
+}
+
+std::map<std::string, Opinion> SelfTrust::snapshot() const {
+  std::map<std::string, Opinion> out;
+  for (const auto& kv : good_) out[kv.first] = opinion(kv.first);
   return out;
 }
 

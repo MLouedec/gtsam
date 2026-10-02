@@ -13,6 +13,7 @@ add_library(parnav_extensions OBJECT
     PreintegrationHelpers.cpp
     MultiModalSimLoader.cpp
     SelfTrust.cpp
+    GatingWindow.cpp
     MarkerAssociation.cpp
     MarkerAzimuthFactor.cpp
 )

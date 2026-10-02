@@ -150,4 +150,141 @@ AssocResult associateMarkerBearing(const gtsam::Pose3& ship_pose,
   return best;
 }
 
+LandAssocResult associateMarkerOrShip(
+    const gtsam::Pose3& observer_pose, double sensor_yaw_offset_rad,
+    double range_m, double azimuth_rad, double sigma_range_m,
+    double sigma_az_rad, const std::vector<double>& markers, int n_markers,
+    const gtsam::Point3& ship_position_estimate, double gate_chi2) {
+  LandAssocResult best;
+  best.maha = std::numeric_limits<double>::infinity();
+
+  const double sx = observer_pose.translation().x();
+  const double sy = observer_pose.translation().y();
+  const double yaw = observer_pose.rotation().rpy().z();
+  const double sensor_yaw_w = yaw + sensor_yaw_offset_rad;
+
+  const double sigma_r2 = sigma_range_m * sigma_range_m;
+  const double sigma_az2 = sigma_az_rad * sigma_az_rad;
+
+  auto testCandidate = [&](double mx, double my, bool is_ship) {
+    const double dx = mx - sx;
+    const double dy = my - sy;
+    const double pred_range = std::hypot(dx, dy);
+    const double pred_az_world = std::atan2(dy, dx);
+    const double pred_az_sensor = ssa(pred_az_world - sensor_yaw_w);
+    const double dr = range_m - pred_range;
+    const double da = ssa(azimuth_rad - pred_az_sensor);
+    const double maha = (dr * dr) / sigma_r2 + (da * da) / sigma_az2;
+    if (maha < best.maha) {
+      best.maha = maha;
+      best.is_ship = is_ship;
+      best.target_world = gtsam::Point3(mx, my, 0.0);
+    }
+  };
+
+  for (int i = 0; i < n_markers; ++i) {
+    testCandidate(markers[i * 3 + 0], markers[i * 3 + 1], false);
+  }
+  testCandidate(ship_position_estimate.x(), ship_position_estimate.y(), true);
+
+  best.matched = best.maha <= gate_chi2;
+  return best;
+}
+
+LandAssocResult associateMarkerBearingOrShip(
+    const gtsam::Pose3& observer_pose, double sensor_yaw_offset_rad,
+    double azimuth_rad, double sigma_az_rad,
+    const std::vector<double>& markers, int n_markers,
+    const gtsam::Point3& ship_position_estimate, double gate_chi2) {
+  LandAssocResult best;
+  best.maha = std::numeric_limits<double>::infinity();
+
+  const double sx = observer_pose.translation().x();
+  const double sy = observer_pose.translation().y();
+  const double yaw = observer_pose.rotation().rpy().z();
+  const double sensor_yaw_w = yaw + sensor_yaw_offset_rad;
+  const double sigma_az2 = sigma_az_rad * sigma_az_rad;
+
+  auto testCandidate = [&](double mx, double my, bool is_ship) {
+    const double pred_az_world = std::atan2(my - sy, mx - sx);
+    const double pred_az_sensor = ssa(pred_az_world - sensor_yaw_w);
+    const double da = ssa(azimuth_rad - pred_az_sensor);
+    const double maha = (da * da) / sigma_az2;
+    if (maha < best.maha) {
+      best.maha = maha;
+      best.is_ship = is_ship;
+      best.target_world = gtsam::Point3(mx, my, 0.0);
+    }
+  };
+
+  for (int i = 0; i < n_markers; ++i) {
+    testCandidate(markers[i * 3 + 0], markers[i * 3 + 1], false);
+  }
+  testCandidate(ship_position_estimate.x(), ship_position_estimate.y(), true);
+
+  best.matched = best.maha <= gate_chi2;
+  return best;
+}
+
+AssocResult associateMarkerRangeOnly(const gtsam::Pose3& ship_pose,
+                                     double range_m, double sigma_range_m,
+                                     const std::vector<double>& markers,
+                                     int n_markers, double gate_chi2) {
+  AssocResult best;
+  best.maha = std::numeric_limits<double>::infinity();
+
+  const double sx = ship_pose.translation().x();
+  const double sy = ship_pose.translation().y();
+  const double sigma_r2 = sigma_range_m * sigma_range_m;
+
+  for (int i = 0; i < n_markers; ++i) {
+    const double mx = markers[i * 3 + 0];
+    const double my = markers[i * 3 + 1];
+    const double pred_range = std::hypot(mx - sx, my - sy);
+    const double dr = range_m - pred_range;
+    const double maha = (dr * dr) / sigma_r2;
+    if (maha < best.maha) {
+      best.maha = maha;
+      best.marker_idx = i;
+      best.marker_world = gtsam::Point3(mx, my, 0.0);
+    }
+  }
+
+  if (best.marker_idx < 0 || best.maha > gate_chi2) {
+    best.marker_idx = -1;
+  }
+  return best;
+}
+
+LandAssocResult associateMarkerOrShipRangeOnly(
+    const gtsam::Pose3& observer_pose, double range_m, double sigma_range_m,
+    const std::vector<double>& markers, int n_markers,
+    const gtsam::Point3& ship_position_estimate, double gate_chi2) {
+  LandAssocResult best;
+  best.maha = std::numeric_limits<double>::infinity();
+
+  const double sx = observer_pose.translation().x();
+  const double sy = observer_pose.translation().y();
+  const double sigma_r2 = sigma_range_m * sigma_range_m;
+
+  auto testCandidate = [&](double mx, double my, bool is_ship) {
+    const double pred_range = std::hypot(mx - sx, my - sy);
+    const double dr = range_m - pred_range;
+    const double maha = (dr * dr) / sigma_r2;
+    if (maha < best.maha) {
+      best.maha = maha;
+      best.is_ship = is_ship;
+      best.target_world = gtsam::Point3(mx, my, 0.0);
+    }
+  };
+
+  for (int i = 0; i < n_markers; ++i) {
+    testCandidate(markers[i * 3 + 0], markers[i * 3 + 1], false);
+  }
+  testCandidate(ship_position_estimate.x(), ship_position_estimate.y(), true);
+
+  best.matched = best.maha <= gate_chi2;
+  return best;
+}
+
 }  // namespace parnav

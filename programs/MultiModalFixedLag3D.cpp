@@ -361,6 +361,8 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
     for (const auto& g : meta.gnss) known.insert(g.name);
     for (const auto& p : meta.polar) known.insert(p.name);
     for (const auto& c : meta.camera) known.insert(c.name);
+    for (const auto& o : meta.odom) known.insert(o.name);
+    for (const auto& r : meta.range) known.insert(r.name);
     for (const auto& n : agent.sensors)
       if (!known.count(n))
         std::fprintf(stderr,

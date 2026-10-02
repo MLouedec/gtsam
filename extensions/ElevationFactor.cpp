@@ -7,8 +7,6 @@ namespace parnav {
 template <typename Pose>
 auto ElevationFactor<Pose>::evaluateError(
     const Pose& p, gtsam::OptionalMatrixType H1) const -> gtsam::Vector {
-  gtsam::Vector3 p_rb_r_hat = R_rn_.transpose() * (parnav::posOf(p) - m_l);
-
   if (H1) {
     gtsam::Matrix13 H_alpha = H_c(p);
     PosJacobian H_p = PosJacobian::Zero();

@@ -17,8 +17,6 @@ auto RangeFactor<Pose>::H_c(const Pose& p) const -> gtsam::Matrix13 {
 template <typename Pose>
 auto RangeFactor<Pose>::evaluateError(
     const Pose& p, gtsam::OptionalMatrixType H1) const -> gtsam::Vector {
-  gtsam::Vector3 p_rb_r_hat = R_rn_.transpose() * (parnav::posOf(p) - m_l);
-
   if (H1) {
     gtsam::Matrix H_rho = H_c(p);
     PosJacobian H_p = PosJacobian::Zero();

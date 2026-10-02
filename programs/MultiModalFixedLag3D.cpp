@@ -95,6 +95,8 @@ struct Args {
   double trust_floor = std::nan("");
   double trust_alpha1 = std::nan("");
   double trust_alpha2 = std::nan("");
+  double trust_forget_good = std::nan("");  // continuous-time forgetting
+  double trust_forget_bad = std::nan("");
   double trust_pos_thresh = std::nan("");
   double trust_hdg_thresh = std::nan("");
   double trust_robust_k_mult = std::nan("");
@@ -136,6 +138,9 @@ Args parseArgs(int argc, char** argv) {
     else if (k == "--trust-floor") a.trust_floor = std::stod(next());
     else if (k == "--trust-alpha1") a.trust_alpha1 = std::stod(next());
     else if (k == "--trust-alpha2") a.trust_alpha2 = std::stod(next());
+    else if (k == "--trust-forget-good")
+      a.trust_forget_good = std::stod(next());
+    else if (k == "--trust-forget-bad") a.trust_forget_bad = std::stod(next());
     else if (k == "--trust-gnss-pos-thresh") a.trust_pos_thresh = std::stod(next());
     else if (k == "--trust-gnss-hdg-thresh") a.trust_hdg_thresh = std::stod(next());
     else if (k == "--trust-robust-k-mult") a.trust_robust_k_mult = std::stod(next());
@@ -170,6 +175,7 @@ Args parseArgs(int argc, char** argv) {
           << "  [--trust-enable | --no-trust]\n"
           << "  [--trust-scaling inverse|inverse_sqrt|linear|off]\n"
           << "  [--trust-floor F] [--trust-alpha1 A] [--trust-alpha2 A]\n"
+          << "  [--trust-forget-good F] [--trust-forget-bad F]\n"
           << "  [--trust-gnss-pos-thresh CHI2] [--trust-gnss-hdg-thresh CHI2]\n"
           << "  [--trust-robust-k-mult K] [--trust-gnss-veto | --no-trust-gnss-veto]\n"
           << "  [--landmarks | --no-landmarks] [--shoreline | --no-shoreline]\n"
@@ -252,6 +258,14 @@ parnav::TrustConfig effectiveTrust(const parnav::TrustConfig& base,
   if (!std::isnan(a.trust_floor)) t.floor = a.trust_floor;
   if (!std::isnan(a.trust_alpha1)) t.alpha1 = a.trust_alpha1;
   if (!std::isnan(a.trust_alpha2)) t.alpha2 = a.trust_alpha2;
+  // Either forgetting value (CLI or YAML) switches to continuous-time mode;
+  // the one left unset defaults to 1% per nominal measurement period.
+  if (!std::isnan(a.trust_forget_good)) t.forget_good = a.trust_forget_good;
+  if (!std::isnan(a.trust_forget_bad)) t.forget_bad = a.trust_forget_bad;
+  if (t.forget_good >= 0.0 || t.forget_bad >= 0.0) {
+    if (t.forget_good < 0.0) t.forget_good = 0.01;
+    if (t.forget_bad < 0.0) t.forget_bad = 0.01;
+  }
   if (!std::isnan(a.trust_pos_thresh)) t.gnss_pos_thresh = a.trust_pos_thresh;
   if (!std::isnan(a.trust_hdg_thresh)) t.gnss_hdg_thresh = a.trust_hdg_thresh;
   if (!std::isnan(a.trust_robust_k_mult))
@@ -319,6 +333,12 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
   parnav::TrustScalingCfg scale_cfg{trust_cfg.scaling, trust_cfg.floor,
                                     trust_cfg.linear_k};
   parnav::SelfTrust trust(trust_cfg.alpha1, trust_cfg.alpha2);
+  const bool trust_continuous =
+      trust_cfg.forget_good >= 0.0 && trust_cfg.forget_bad >= 0.0;
+  if (trust_continuous) {
+    trust.setForgetting(trust_cfg.forget_good, trust_cfg.forget_bad);
+    trust.setDefaultRate(1.0 / meta.dt_nominal);
+  }
 
   // ---- Gating pass-ratio (windowed, independent of the trust EWMA) ----
   const double gate_window_s = std::isnan(args.gate_window_s)
@@ -678,8 +698,30 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
     gtsam::NoiseModelFactor::shared_ptr factor;
   };
 
+  // Nominal measurement rate per trust key for continuous-time forgetting:
+  // min(sensor frequency, 1/dt_nominal) -- the smoother cannot see a sensor
+  // faster than once per step. Unknown frequency -> default (1/dt_nominal).
+  if (trust_continuous) {
+    const double max_rate = 1.0 / meta.dt_nominal;
+    auto rate = [&](double f) { return f > 0.0 ? std::min(f, max_rate) : 0.0; };
+    for (const auto& gk : gnss_keys) {
+      const double r = rate(meta.gnss[gk.sensor_idx].frequency);
+      trust.setNominalRate(gk.pos_key, r);
+      trust.setNominalRate(gk.hdg_key, r);
+    }
+    for (const auto& ps : polar_sensors)
+      trust.setNominalRate(ps.key, rate(meta.polar[ps.sensor_idx].frequency));
+    for (const auto& cs : camera_sensors)
+      trust.setNominalRate(cs.key, rate(meta.camera[cs.sensor_idx].frequency));
+    for (const auto& os : odom_sensors)
+      trust.setNominalRate(os.key, rate(meta.odom[os.sensor_idx].frequency));
+    for (const auto& rs : range_sensors)
+      trust.setNominalRate(rs.key, rate(meta.range[rs.sensor_idx].frequency));
+  }
+
   // ---- Main loop ----
   for (int t = 1; t < T; ++t) {
+    trust.setTime(d.time[t]);
     // Preintegrate the high-rate IMU sub-samples covering (t-1, t].
     for (int k = 0; k < d.M; ++k) {
       gtsam::Vector3 omega, accel;

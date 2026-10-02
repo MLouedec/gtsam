@@ -27,6 +27,21 @@ class SelfTrust {
   SelfTrust(double alpha1 = 0.9, double alpha2 = 0.99,
             double default_trust = 0.5);
 
+  // Switch to continuous-time forgetting. forget_good/forget_bad are the
+  // fractions of the good/bad counters forgotten per *nominal measurement
+  // period* of each sensor (e.g. 0.01 = 1%). Per step the counters are
+  // multiplied by (1-forget)^(f_nom * dt_elapsed), so the decay is the same
+  // in wall-clock time whatever the smoother step rate, and composes exactly
+  // over irregular steps. alpha1/alpha2 are then unused.
+  void setForgetting(double forget_good, double forget_bad);
+  // Nominal measurement rate (Hz) used by a key (default: default_rate).
+  void setNominalRate(const std::string& sensor, double hz);
+  void setDefaultRate(double hz) { default_rate_ = hz; }
+  // Current smoother time (s); call once per step before any update/decay.
+  // Only used in continuous-time mode.
+  void setTime(double t) { now_ = t; }
+  bool continuousTime() const { return continuous_; }
+
   void update(const std::string& sensor, bool is_good);
   void decay(const std::string& sensor);  // applied when sensor is silent
   double get(const std::string& sensor) const;
@@ -40,10 +55,20 @@ class SelfTrust {
 
  private:
   void ensure(const std::string& sensor);
+  // Continuous-time mode: decay the counters of `sensor` for the time elapsed
+  // since it was last advanced (no-op on the first call or within a step).
+  void advance(const std::string& sensor);
 
   double alpha1_;
   double alpha2_;
   double default_;
+  bool continuous_{false};
+  double forget_good_{0.01};
+  double forget_bad_{0.01};
+  double default_rate_{1.0};
+  double now_{0.0};
+  std::map<std::string, double> rate_;
+  std::map<std::string, double> last_t_;
   std::map<std::string, double> good_;
   std::map<std::string, double> bad_;
   std::vector<std::map<std::string, Opinion>> history_;

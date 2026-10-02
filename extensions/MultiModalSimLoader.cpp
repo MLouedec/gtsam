@@ -110,6 +110,7 @@ SimMeta loadSimMeta(const std::string& json_path) {
   for (const auto& g : sensors.value("gnss", nlohmann::json::array())) {
     GnssSensorMeta s;
     s.name = g.value("name", std::string{});
+    s.frequency = g.value("frequency", 0.0);
     s.ship = g.value("ship", -1);
     s.relative_pose =
         jsonToArr<3>(g.value("relative_pose", nlohmann::json::array()),
@@ -121,6 +122,7 @@ SimMeta loadSimMeta(const std::string& json_path) {
   for (const auto& p : sensors.value("polar", nlohmann::json::array())) {
     PolarSensorMeta s;
     s.name = p.value("name", std::string{});
+    s.frequency = p.value("frequency", 0.0);
     s.ship = p.value("ship", -1);
     s.relative_pose =
         jsonToArr<3>(p.value("relative_pose", nlohmann::json::array()),
@@ -136,6 +138,7 @@ SimMeta loadSimMeta(const std::string& json_path) {
   for (const auto& c : sensors.value("camera", nlohmann::json::array())) {
     CameraSensorMeta s;
     s.name = c.value("name", std::string{});
+    s.frequency = c.value("frequency", 0.0);
     s.ship = c.value("ship", -1);
     s.relative_pose =
         jsonToArr<3>(c.value("relative_pose", nlohmann::json::array()),
@@ -146,6 +149,7 @@ SimMeta loadSimMeta(const std::string& json_path) {
   for (const auto& o : sensors.value("odom", nlohmann::json::array())) {
     OdomSensorMeta s;
     s.name = o.value("name", std::string{});
+    s.frequency = o.value("frequency", 0.0);
     s.ship = o.value("ship", -1);
     s.relative_pose =
         jsonToArr<3>(o.value("relative_pose", nlohmann::json::array()),
@@ -157,6 +161,7 @@ SimMeta loadSimMeta(const std::string& json_path) {
   for (const auto& r : sensors.value("range", nlohmann::json::array())) {
     RangeSensorMeta s;
     s.name = r.value("name", std::string{});
+    s.frequency = r.value("frequency", 0.0);
     s.ship = r.value("ship", -1);
     s.relative_pose =
         jsonToArr<3>(r.value("relative_pose", nlohmann::json::array()),
@@ -176,6 +181,8 @@ SimMeta loadSimMeta(const std::string& json_path) {
     m.trust.linear_k = t.value("linear_k", 5.0);
     m.trust.alpha1 = t.value("alpha1", 0.9);
     m.trust.alpha2 = t.value("alpha2", 0.99);
+    m.trust.forget_good = t.value("forget_good", -1.0);
+    m.trust.forget_bad = t.value("forget_bad", -1.0);
     m.trust.gnss_pos_thresh = t.value("gnss_pos_thresh", 5.99);
     m.trust.gnss_hdg_thresh = t.value("gnss_hdg_thresh", 3.84);
     m.trust.robust_k_mult = t.value("robust_k_mult", 3.0);

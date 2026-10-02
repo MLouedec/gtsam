@@ -17,6 +17,7 @@ namespace parnav {
 
 struct GnssSensorMeta {
   std::string name;
+  double frequency{0.0};  // nominal measurement rate (Hz); 0 = unknown
   int ship{-1};
   std::array<double, 3> relative_pose{{0.0, 0.0, 0.0}};
   double noise_xy{0.0};
@@ -25,6 +26,7 @@ struct GnssSensorMeta {
 
 struct PolarSensorMeta {
   std::string name;
+  double frequency{0.0};  // nominal measurement rate (Hz); 0 = unknown
   int ship{-1};
   std::array<double, 3> relative_pose{{0.0, 0.0, 0.0}};
   double range_noise{0.0};
@@ -37,6 +39,7 @@ struct PolarSensorMeta {
 
 struct CameraSensorMeta {
   std::string name;
+  double frequency{0.0};  // nominal measurement rate (Hz); 0 = unknown
   int ship{-1};
   std::array<double, 3> relative_pose{{0.0, 0.0, 0.0}};
   double angle_noise_deg{0.0};
@@ -44,6 +47,7 @@ struct CameraSensorMeta {
 
 struct OdomSensorMeta {
   std::string name;
+  double frequency{0.0};  // nominal measurement rate (Hz); 0 = unknown
   int ship{-1};
   std::array<double, 3> relative_pose{{0.0, 0.0, 0.0}};
   double noise_pos{0.0};  // m, sigma on dx/dy per delta
@@ -52,6 +56,7 @@ struct OdomSensorMeta {
 
 struct RangeSensorMeta {
   std::string name;
+  double frequency{0.0};  // nominal measurement rate (Hz); 0 = unknown
   int ship{-1};
   std::array<double, 3> relative_pose{{0.0, 0.0, 0.0}};
   double range_noise{0.0};
@@ -69,6 +74,11 @@ struct TrustConfig {
   double linear_k{5.0};
   double alpha1{0.9};
   double alpha2{0.99};
+  // Continuous-time forgetting (see SelfTrust::setForgetting): fraction of the
+  // good/bad counters forgotten per nominal measurement period. Negative =
+  // unset -> legacy per-step alpha1/alpha2 behaviour.
+  double forget_good{-1.0};
+  double forget_bad{-1.0};
   double gnss_pos_thresh{5.99};      // chi2_2 @ 95%
   double gnss_hdg_thresh{3.84};      // chi2_1 @ 95%
   double robust_k_mult{3.0};

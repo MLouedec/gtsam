@@ -15,14 +15,52 @@ void SelfTrust::ensure(const std::string& sensor) {
   }
 }
 
+void SelfTrust::setForgetting(double forget_good, double forget_bad) {
+  if (forget_good < 0.0 || forget_good >= 1.0 || forget_bad < 0.0 ||
+      forget_bad >= 1.0)
+    throw std::runtime_error("trust forgetting must be in [0, 1)");
+  continuous_ = true;
+  forget_good_ = forget_good;
+  forget_bad_ = forget_bad;
+}
+
+void SelfTrust::setNominalRate(const std::string& sensor, double hz) {
+  if (hz > 0.0) rate_[sensor] = hz;
+}
+
+void SelfTrust::advance(const std::string& sensor) {
+  auto last = last_t_.find(sensor);
+  if (last == last_t_.end()) {
+    last_t_[sensor] = now_;  // first sighting: nothing to forget yet
+    return;
+  }
+  const double dt = now_ - last->second;
+  if (dt <= 0.0) return;  // already advanced this step
+  auto r = rate_.find(sensor);
+  const double periods = (r == rate_.end() ? default_rate_ : r->second) * dt;
+  good_[sensor] *= std::pow(1.0 - forget_good_, periods);
+  bad_[sensor] *= std::pow(1.0 - forget_bad_, periods);
+  last->second = now_;
+}
+
 void SelfTrust::update(const std::string& sensor, bool is_good) {
   ensure(sensor);
+  if (continuous_) {
+    advance(sensor);
+    good_[sensor] += is_good ? 1.0 : 0.0;
+    bad_[sensor] += is_good ? 0.0 : 1.0;
+    return;
+  }
   good_[sensor] = alpha1_ * good_[sensor] + (is_good ? 1.0 : 0.0);
   bad_[sensor] = alpha2_ * bad_[sensor] + (is_good ? 0.0 : 1.0);
 }
 
 void SelfTrust::decay(const std::string& sensor) {
   ensure(sensor);
+  if (continuous_) {
+    advance(sensor);
+    return;
+  }
   good_[sensor] *= alpha1_;
   bad_[sensor] *= alpha2_;
 }

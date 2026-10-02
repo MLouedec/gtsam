@@ -82,8 +82,17 @@ struct Options {
   std::string output_dir =
       "/Users/ghms/ws/ntnu/parnav_ins_simulator/results/";
 
-  double acc_noise_scaling = 33.0;
-  double gyro_noise_scaling = 100.0;
+  // Datasheet white-noise inflation, per axis (x, y, z) -- covers in-flight
+  // vibration. A single value on the CLI sets all three axes.
+  Eigen::Vector3d acc_noise_scaling = Eigen::Vector3d::Constant(33.0);
+  Eigen::Vector3d gyro_noise_scaling = Eigen::Vector3d::Constant(100.0);
+  // Local gravity [m/s^2]: normal gravity near the flight site (~63.39 N,
+  // ~100 m). Standard g0 is only used for unit conversion (mg).
+  double gravity = 9.8214;
+  // Static turn-on bias pre-calibration from the motors-off window, subtracted
+  // from the IMU before preintegration. calib_t1 <= calib_t0 -> auto-detect.
+  bool static_calib = true;
+  double calib_t0 = 0.0, calib_t1 = 0.0;
   // Inflate the datasheet-true stationary bias sigma, per sensor (1 = true).
   double bias_scaling_acc = 1.0;
   double bias_scaling_gyro = 1.0;
@@ -135,14 +144,30 @@ static void print_usage(const char* prog) {
       << "  --gm-decay {on|off}         gm in-window bias decay (default on)\n"
       << "  --base-path <path>          per-sensor CSV folder\n"
       << "  --output-dir <path>         result CSV directory\n"
-      << "  --acc-noise-scaling <s>     (default 33)\n"
-      << "  --gyro-noise-scaling <s>    (default 100)\n"
+      << "  --acc-noise-scaling <s|sx,sy,sz>   (default 33)\n"
+      << "  --gyro-noise-scaling <s|sx,sy,sz>  (default 100)\n"
+      << "  --gravity <m/s^2>           local gravity (default 9.8214)\n"
+      << "  --static-calib {on|off}     subtract static turn-on bias (default on)\n"
+      << "  --calib-window <t0,t1>      static window [s] (default: auto,\n"
+      << "                              motors-off period before take-off)\n"
       << "  --bias-scaling <s>          inflate datasheet bias sigma, acc and\n"
       << "                              gyro alike (default 1)\n"
       << "  --bias-scaling-acc <s>      accel bias sigma only (default 1)\n"
       << "  --bias-scaling-gyro <s>     gyro bias sigma only (default 1)\n"
       << "  --use-music                 use the _root dataset variant\n"
       << "  -h, --help\n";
+}
+
+// "s" -> (s, s, s); "sx,sy,sz" -> per axis.
+static bool parse_vec3(const std::string& str, Eigen::Vector3d& v) {
+  std::stringstream ss(str);
+  std::string tok;
+  std::vector<double> x;
+  while (std::getline(ss, tok, ',')) x.push_back(std::stod(tok));
+  if (x.size() == 1) v.setConstant(x[0]);
+  else if (x.size() == 3) v << x[0], x[1], x[2];
+  else return false;
+  return true;
 }
 
 static bool parse_args(int argc, char** argv, Options& o) {
@@ -234,10 +259,31 @@ static bool parse_args(int argc, char** argv, Options& o) {
         o.output_dir.push_back('/');
     } else if (a == "--acc-noise-scaling") {
       if (!need(i, "--acc-noise-scaling")) return false;
-      o.acc_noise_scaling = std::stod(argv[++i]);
+      if (!parse_vec3(argv[++i], o.acc_noise_scaling)) {
+        std::cerr << "--acc-noise-scaling expects s or sx,sy,sz\n";
+        return false;
+      }
     } else if (a == "--gyro-noise-scaling") {
       if (!need(i, "--gyro-noise-scaling")) return false;
-      o.gyro_noise_scaling = std::stod(argv[++i]);
+      if (!parse_vec3(argv[++i], o.gyro_noise_scaling)) {
+        std::cerr << "--gyro-noise-scaling expects s or sx,sy,sz\n";
+        return false;
+      }
+    } else if (a == "--gravity") {
+      if (!need(i, "--gravity")) return false;
+      o.gravity = std::stod(argv[++i]);
+    } else if (a == "--static-calib") {
+      if (!need(i, "--static-calib")) return false;
+      std::string v = argv[++i];
+      if (v == "on") o.static_calib = true;
+      else if (v == "off") o.static_calib = false;
+      else { std::cerr << "Unknown --static-calib " << v << "\n"; return false; }
+    } else if (a == "--calib-window") {
+      if (!need(i, "--calib-window")) return false;
+      if (std::sscanf(argv[++i], "%lf,%lf", &o.calib_t0, &o.calib_t1) != 2) {
+        std::cerr << "--calib-window expects t0,t1\n";
+        return false;
+      }
     } else if (a == "--bias-scaling") {
       if (!need(i, "--bias-scaling")) return false;
       o.bias_scaling_acc = o.bias_scaling_gyro = std::stod(argv[++i]);
@@ -330,6 +376,78 @@ struct Data {
   std::array<std::vector<int>, NUM_UWB> uwb_idx;
   std::array<std::vector<double>, NUM_UWB> uwb_range;
 };
+
+static std::optional<Data> load_data(const std::string& base_path);
+
+// Static turn-on bias pre-calibration. Averages the IMU over a motors-off
+// window and subtracts the result from every sample, so the bias states only
+// model the in-run residual (a GM bias then reverts to the calibrated value):
+//   gyro : full static mean (this also removes the earth rate at the static
+//          heading -- earth rate is not modelled)
+//   accel: only the part along the measured gravity direction,
+//          (|f_mean| - g) * f_mean / |f_mean|. Horizontal accel bias is
+//          indistinguishable from tilt when static, so it is left to the filter.
+// Window: [t0, t1] if t1 > t0, else auto -- from the start until 5 s before the
+// first 1 s block whose gyro std exceeds 5x the median of the first 30 blocks.
+static bool static_calibrate(Data& d, double g, double t0, double t1) {
+  const size_t N = d.t.size();
+  if (!(t1 > t0)) {
+    std::vector<double> sd;
+    std::vector<size_t> start;
+    for (size_t i = 0; i < N;) {
+      Eigen::Vector3d s = Eigen::Vector3d::Zero(), s2 = Eigen::Vector3d::Zero();
+      size_t j = i;
+      for (; j < N && d.t[j] < d.t[i] + 1.0; ++j) {
+        s += d.w_m[j];
+        s2 += d.w_m[j].cwiseAbs2();
+      }
+      const double n = static_cast<double>(j - i);
+      sd.push_back(std::sqrt((s2 / n - (s / n).cwiseAbs2()).sum()));
+      start.push_back(i);
+      i = j;
+    }
+    if (sd.size() < 40) {
+      std::cerr << "static_calibrate: record too short to auto-detect\n";
+      return false;
+    }
+    std::vector<double> head(sd.begin(), sd.begin() + 30);
+    std::nth_element(head.begin(), head.begin() + 15, head.end());
+    const double thr = 5.0 * head[15];
+    size_t k = 0;
+    while (k < sd.size() && sd[k] <= thr) ++k;
+    t0 = d.t.front();
+    t1 = (k < sd.size() ? d.t[start[k]] : d.t.back()) - 5.0;
+  }
+  Eigen::Vector3d fs = Eigen::Vector3d::Zero(), ws = Eigen::Vector3d::Zero();
+  size_t n = 0;
+  for (size_t i = 0; i < N; ++i)
+    if (d.t[i] >= t0 && d.t[i] <= t1) {
+      fs += d.f_m[i];
+      ws += d.w_m[i];
+      ++n;
+    }
+  if (t1 - t0 < 30.0 || n == 0) {
+    std::cerr << "static_calibrate: static window [" << t0 << ", " << t1
+              << "] s is shorter than 30 s\n";
+    return false;
+  }
+  fs /= static_cast<double>(n);
+  ws /= static_cast<double>(n);
+  const Eigen::Vector3d b_g = ws;
+  const Eigen::Vector3d b_a = (fs.norm() - g) * fs.normalized();
+  for (size_t i = 0; i < N; ++i) {
+    d.f_m[i] -= b_a;
+    d.w_m[i] -= b_g;
+  }
+  const double r2dh = 180.0 / M_PI * 3600.0, mg = 9.80665e-3;
+  printf("Static calib: window %.1f..%.1f s | |f| %.5f vs g %.5f\n", t0, t1,
+         fs.norm(), g);
+  printf("  gyro  bias [deg/h] = [%.2f %.2f %.2f]\n", b_g(0) * r2dh,
+         b_g(1) * r2dh, b_g(2) * r2dh);
+  printf("  accel bias [mg]    = [%.3f %.3f %.3f] (along gravity only)\n",
+         b_a(0) / mg, b_a(1) / mg, b_a(2) / mg);
+  return true;
+}
 
 static std::optional<Data> load_data(const std::string& base_path) {
   Data d;
@@ -471,9 +589,9 @@ void run_estimation(const Data& d, const Options& opts) {
   const double sig2_ba = 2.0 * B_acc * B_acc * std::log(2.0) / M_PI *
                          (mg * mg);  // (m/s^2)^2
 
-  const double q_v = std::pow(opts.acc_noise_scaling * vrw / 60.0, 2.0);
-  const double q_o =
-      std::pow((opts.gyro_noise_scaling * arw / 60.0) * deg2rad(1.0), 2.0);
+  const gtsam::Vector3 sig_v = opts.acc_noise_scaling * (vrw / 60.0);
+  const gtsam::Vector3 sig_o =
+      opts.gyro_noise_scaling * ((arw / 60.0) * deg2rad(1.0));
   // Stationary variance P_inf = sigma^2; bias_scaling_{acc,gyro} inflate the
   // stationary sigma per sensor (so variance scales by scaling^2). With the
   // datasheet sigma above, the physically-true run is --bias-scaling 1.
@@ -490,9 +608,9 @@ void run_estimation(const Data& d, const Options& opts) {
       kIsGM ? (2.0 / T_ars) * P_inf_o
             : P_inf_o * (1.0 - std::exp(-2.0 * t_eval / T_ars)) / t_eval;
 
-  auto p = gtsam::PreintegrationCombinedParamsT<BIAS>::MakeSharedD(g0);
-  p->accelerometerCovariance = gtsam::I_3x3 * q_v;
-  p->gyroscopeCovariance = gtsam::I_3x3 * q_o;
+  auto p = gtsam::PreintegrationCombinedParamsT<BIAS>::MakeSharedD(opts.gravity);
+  p->accelerometerCovariance = gtsam::Matrix3(sig_v.cwiseAbs2().asDiagonal());
+  p->gyroscopeCovariance = gtsam::Matrix3(sig_o.cwiseAbs2().asDiagonal());
   p->integrationCovariance = gtsam::I_3x3 * 1e-40;
   p->biasAccCovariance = gtsam::I_3x3 * q_b_v;
   p->biasOmegaCovariance = gtsam::I_3x3 * q_b_o;
@@ -543,7 +661,14 @@ void run_estimation(const Data& d, const Options& opts) {
   gtsam::Pose3 pose0(R0, p0);
   const double A_pos = 2.5, A_vel = 0.5, A_att_rp = deg2rad(180.0);
   const double A_pos_z = 5.0, A_yaw = deg2rad(180.0);
-  const double A_acc_bias = 0.1, A_gyro_bias = deg2rad(0.5);
+  // Bias prior. Without static calibration it must cover the full turn-on
+  // bias (~6 mg, ~200 deg/h); with it only the in-run residual remains: gyro
+  // a few deg/h (36 deg/h prior), accel z < 1 mg (1 mg). Accel x/y stays loose
+  // (10 mg): tilt-ambiguous when static, and y shifts ~13 mg at take-off
+  // (a 5 mg prior there raised the CB RMSE from 0.152 to 0.199 m).
+  const double A_acc_bias_xy = 0.1;
+  const double A_acc_bias_z = opts.static_calib ? 0.01 : 0.1;
+  const double A_gyro_bias = opts.static_calib ? deg2rad(0.01) : deg2rad(0.5);
 
   BIAS prior_bias;
   if constexpr (std::is_same_v<BIAS, gtsam::imuBias::GaussMarkovBias>) {
@@ -551,8 +676,8 @@ void run_estimation(const Data& d, const Options& opts) {
         gtsam::Vector3::Zero(), gtsam::Vector3::Zero(), T_acc, T_ars);
   }
   auto bias_noise = gtsam::noiseModel::Diagonal::Sigmas(
-      (gtsam::Vector(6) << A_acc_bias, A_acc_bias, A_acc_bias, A_gyro_bias,
-       A_gyro_bias, A_gyro_bias)
+      (gtsam::Vector(6) << A_acc_bias_xy, A_acc_bias_xy, A_acc_bias_z,
+       A_gyro_bias, A_gyro_bias, A_gyro_bias)
           .finished());
 
   // --- Smoother ---
@@ -950,7 +1075,11 @@ int main(int argc, char** argv) {
 
   auto data = load_data(opts.base_path);
   if (!data) return 1;
-  printf("Loaded %zu samples\n", data->t.size());
+  printf("Loaded %zu samples | gravity %.5f m/s^2\n", data->t.size(),
+         opts.gravity);
+  if (opts.static_calib &&
+      !static_calibrate(*data, opts.gravity, opts.calib_t0, opts.calib_t1))
+    return 1;
 
   try {
     using CB = gtsam::imuBias::ConstantBias;

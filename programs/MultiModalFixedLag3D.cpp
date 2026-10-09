@@ -1002,21 +1002,14 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
         int n_rejected = 0;
 
         if (rs.is_ship_tracker) {
-          const gtsam::Pose3 observer_pose(gtsam::Rot3::Identity(), rs.world_pos);
+          // Known-ID ship target: nothing to associate, every reading is the
+          // ship. Consistency is the (gating-only) innovation pre-check below.
           const gtsam::Point3 ship_xy(pred.pose().x(), pred.pose().y(), 0.0);
           bool precheck_bad = false;
           for (int k = 0; k < d.kmax_range_marker; ++k) {
             if (!d.rangeMarkerValid(rs.sensor_idx, t, k)) continue;
             const double range_m = d.rangeMarkerReading(rs.sensor_idx, t, k);
             ++n_total;
-
-            parnav::LandAssocResult ar = parnav::associateMarkerOrShipRangeOnly(
-                observer_pose, range_m, rs.sigma_range, {}, 0, ship_xy,
-                assoc_gate_chi2);
-            if (!ar.matched) {
-              ++n_rejected;
-              continue;
-            }
 
             double sr = rs.sigma_range;
             if (d.hasRangeMarkerStd()) {
@@ -1037,11 +1030,10 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
             recordFactor(rs.key, "range");
           }
           if (n_total > 0) {
-            const bool any_accepted = n_total > n_rejected;
             if (gating_on) {
-              trust.update(rs.key, any_accepted && !precheck_bad);
+              trust.update(rs.key, !precheck_bad);
               sensors_seen_this_step.insert(rs.key);
-            } else if (any_accepted) {
+            } else {
               voteGood(rs.key);
             }
           }

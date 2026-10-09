@@ -2,8 +2,8 @@
 
 // Per-sensor self-trust (Beta-reputation with exponential forgetting).
 // One-for-one C++ port of `lib/sensor_trust.py::SelfTrust` from the
-// multi-modale-simulator. Stateless w.r.t. GTSAM types; the smoother layer
-// converts trust to a sigma multiplier via `trustScale()`.
+// multi-modale-simulator. Stateless w.r.t. GTSAM types; it only tracks
+// the subjective opinion and never scales the graph's noise.
 
 #include <map>
 #include <string>
@@ -73,14 +73,5 @@ class SelfTrust {
   std::map<std::string, double> bad_;
   std::vector<std::map<std::string, Opinion>> history_;
 };
-
-// Sigma-scaling laws matching Python `_trust_scale`.
-struct TrustScalingCfg {
-  std::string scaling{"inverse"};  // inverse | inverse_sqrt | linear | off
-  double floor{0.001};
-  double linear_k{5.0};
-};
-
-double trustScale(double trust, const TrustScalingCfg& cfg);
 
 }  // namespace parnav

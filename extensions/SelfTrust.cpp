@@ -94,13 +94,4 @@ std::map<std::string, Opinion> SelfTrust::snapshot() const {
 
 void SelfTrust::record() { history_.push_back(snapshot()); }
 
-double trustScale(double trust, const TrustScalingCfg& cfg) {
-  if (cfg.scaling == "off") return 1.0;
-  double t_eff = trust < cfg.floor ? cfg.floor : trust;
-  if (cfg.scaling == "inverse") return 1.0 / t_eff;
-  if (cfg.scaling == "inverse_sqrt") return 1.0 / std::sqrt(t_eff);
-  if (cfg.scaling == "linear") return 1.0 + cfg.linear_k * (1.0 - trust);
-  throw std::runtime_error("unknown trust scaling: " + cfg.scaling);
-}
-
 }  // namespace parnav

@@ -68,10 +68,12 @@ struct RangeSensorMeta {
 };
 
 struct TrustConfig {
-  bool enable{false};
-  std::string scaling{"inverse"};   // inverse | inverse_sqrt | linear | off
-  double floor{0.001};
-  double linear_k{5.0};
+  // Gating layer: innovation pre-checks (bad votes), robust kernels, ALARM1
+  // reject windows. Implies subjective_opinion.
+  bool activate_gating{false};
+  // Track per-sensor Beta counters / opinion (good votes only unless gating
+  // is active) and write _trust.csv. Never changes the estimate.
+  bool subjective_opinion{false};
   double alpha1{0.9};
   double alpha2{0.99};
   // Continuous-time forgetting (see SelfTrust::setForgetting): fraction of the
@@ -81,12 +83,12 @@ struct TrustConfig {
   double forget_bad{-1.0};
   double gnss_pos_thresh{5.99};      // chi2_2 @ 95%
   double gnss_hdg_thresh{3.84};      // chi2_1 @ 95%
+  double odom_thresh{7.81};          // chi2_3 @ 95% (dx, dy, dyaw)
+  double range_thresh{3.84};         // chi2_1 @ 95%
   double robust_k_mult{3.0};
-  bool gnss_veto{false};
 };
 
 struct GatingConfig {
-  double window_s{10.0};
   double assoc_gate_chi2{5.99};  // chi2_2 @ 95%
 };
 
@@ -104,8 +106,9 @@ struct ImuNoiseConfig {
 struct AgentMeta {
   std::string id;
   std::vector<std::string> sensors;
-  // Per-agent trust override (unset = use the global sidecar/CLI value).
-  std::optional<bool> trust_enable;
+  // Per-agent overrides (unset = use the global sidecar/CLI value).
+  std::optional<bool> activate_gating;
+  std::optional<bool> subjective_opinion;
 };
 
 struct SimMeta {

@@ -14,7 +14,6 @@
 
 #include "AzimuthFactor.hpp"
 #include "CompassFactor.hpp"
-#include "GatingWindow.hpp"
 #include "MarkerAssociation.hpp"
 #include "MarkerAzimuthFactor.hpp"
 #include "MultiModalSimLoader.hpp"
@@ -90,9 +89,8 @@ struct Args {
   // meta.gating.assoc_gate_chi2, default 5.99 = 2-DoF χ² @ 95%).
   double assoc_gate_chi2 = std::nan("");
   // Trust overrides (sentinel: empty / NaN means "use sidecar value")
-  int trust_enable = -1;              // -1 keep, 0 force off, 1 force on
-  std::string trust_scaling;
-  double trust_floor = std::nan("");
+  int activate_gating = -1;           // -1 keep, 0 force off, 1 force on
+  int subjective_opinion = -1;        // -1 keep, 0 force off, 1 force on
   double trust_alpha1 = std::nan("");
   double trust_alpha2 = std::nan("");
   double trust_forget_good = std::nan("");  // continuous-time forgetting
@@ -100,9 +98,8 @@ struct Args {
   double trust_pos_thresh = std::nan("");
   double trust_hdg_thresh = std::nan("");
   double trust_robust_k_mult = std::nan("");
-  int trust_gnss_veto = -1;
-  // Gating window override (sentinel: NaN means "use sidecar value").
-  double gate_window_s = std::nan("");
+  double trust_odom_thresh = std::nan("");
+  double trust_range_thresh = std::nan("");
   // Distributed-agent sensor subset (empty = no filtering, all sensors —
   // fully backward compatible with pre-agents invocations).
   std::string agent_id;
@@ -132,10 +129,10 @@ Args parseArgs(int argc, char** argv) {
     else if (k == "--robust-pos-k") a.robust_pos_k = std::stod(next());
     else if (k == "--robust-yaw") a.robust_yaw = next();
     else if (k == "--robust-yaw-k") a.robust_yaw_k = std::stod(next());
-    else if (k == "--trust-enable") a.trust_enable = 1;
-    else if (k == "--no-trust") a.trust_enable = 0;
-    else if (k == "--trust-scaling") a.trust_scaling = next();
-    else if (k == "--trust-floor") a.trust_floor = std::stod(next());
+    else if (k == "--activate-gating") a.activate_gating = 1;
+    else if (k == "--no-activate-gating") a.activate_gating = 0;
+    else if (k == "--subjective-opinion") a.subjective_opinion = 1;
+    else if (k == "--no-subjective-opinion") a.subjective_opinion = 0;
     else if (k == "--trust-alpha1") a.trust_alpha1 = std::stod(next());
     else if (k == "--trust-alpha2") a.trust_alpha2 = std::stod(next());
     else if (k == "--trust-forget-good")
@@ -144,8 +141,8 @@ Args parseArgs(int argc, char** argv) {
     else if (k == "--trust-gnss-pos-thresh") a.trust_pos_thresh = std::stod(next());
     else if (k == "--trust-gnss-hdg-thresh") a.trust_hdg_thresh = std::stod(next());
     else if (k == "--trust-robust-k-mult") a.trust_robust_k_mult = std::stod(next());
-    else if (k == "--trust-gnss-veto") a.trust_gnss_veto = 1;
-    else if (k == "--no-trust-gnss-veto") a.trust_gnss_veto = 0;
+    else if (k == "--trust-odom-thresh") a.trust_odom_thresh = std::stod(next());
+    else if (k == "--trust-range-thresh") a.trust_range_thresh = std::stod(next());
     else if (k == "--robust-polar") a.robust_polar = next();
     else if (k == "--robust-polar-k") a.robust_polar_k = std::stod(next());
     else if (k == "--no-landmarks") a.use_landmarks = 0;
@@ -163,7 +160,6 @@ Args parseArgs(int argc, char** argv) {
     else if (k == "--no-range") a.use_range = 0;
     else if (k == "--range") a.use_range = 1;
     else if (k == "--assoc-gate-chi2") a.assoc_gate_chi2 = std::stod(next());
-    else if (k == "--gate-window-s") a.gate_window_s = std::stod(next());
     else if (k == "--agent-id") a.agent_id = next();
     else if (k == "--reject-episodes") a.reject_episodes_csv = next();
     else if (k == "-h" || k == "--help") {
@@ -172,12 +168,13 @@ Args parseArgs(int argc, char** argv) {
           << "[--ship-index 0] [--lag 5.0] [--out estimates.csv]\n"
           << "  [--robust-pos none|huber|tukey|gmc] [--robust-pos-k K]\n"
           << "  [--robust-yaw none|huber|tukey|gmc] [--robust-yaw-k K]\n"
-          << "  [--trust-enable | --no-trust]\n"
-          << "  [--trust-scaling inverse|inverse_sqrt|linear|off]\n"
-          << "  [--trust-floor F] [--trust-alpha1 A] [--trust-alpha2 A]\n"
+          << "  [--activate-gating | --no-activate-gating]\n"
+          << "  [--subjective-opinion | --no-subjective-opinion]\n"
+          << "  [--trust-alpha1 A] [--trust-alpha2 A]\n"
           << "  [--trust-forget-good F] [--trust-forget-bad F]\n"
           << "  [--trust-gnss-pos-thresh CHI2] [--trust-gnss-hdg-thresh CHI2]\n"
-          << "  [--trust-robust-k-mult K] [--trust-gnss-veto | --no-trust-gnss-veto]\n"
+          << "  [--trust-odom-thresh CHI2] [--trust-range-thresh CHI2]\n"
+          << "  [--trust-robust-k-mult K]\n"
           << "  [--landmarks | --no-landmarks] [--shoreline | --no-shoreline]\n"
           << "  [--camera | --no-camera] [--assoc-gate-chi2 CHI2]\n"
           << "  [--robust-polar none|huber|tukey|gmc] [--robust-polar-k K]\n"
@@ -185,7 +182,6 @@ Args parseArgs(int argc, char** argv) {
           << "  [--robust-odom-k K]\n"
           << "  [--range | --no-range] [--robust-range none|huber|tukey|gmc]\n"
           << "  [--robust-range-k K]\n"
-          << "  [--gate-window-s SECONDS]\n"
           << "  [--agent-id NAME] [--reject-episodes PATH]\n";
       std::exit(0);
     } else {
@@ -251,11 +247,14 @@ parnav::TrustConfig effectiveTrust(const parnav::TrustConfig& base,
                                    const Args& a,
                                    const parnav::AgentMeta& agent) {
   parnav::TrustConfig t = base;
-  if (agent.trust_enable.has_value()) t.enable = *agent.trust_enable;
-  if (a.trust_enable == 0) t.enable = false;
-  if (a.trust_enable == 1) t.enable = true;
-  if (!a.trust_scaling.empty()) t.scaling = a.trust_scaling;
-  if (!std::isnan(a.trust_floor)) t.floor = a.trust_floor;
+  if (agent.activate_gating.has_value())
+    t.activate_gating = *agent.activate_gating;
+  if (agent.subjective_opinion.has_value())
+    t.subjective_opinion = *agent.subjective_opinion;
+  if (a.activate_gating == 0) t.activate_gating = false;
+  if (a.activate_gating == 1) t.activate_gating = true;
+  if (a.subjective_opinion == 0) t.subjective_opinion = false;
+  if (a.subjective_opinion == 1) t.subjective_opinion = true;
   if (!std::isnan(a.trust_alpha1)) t.alpha1 = a.trust_alpha1;
   if (!std::isnan(a.trust_alpha2)) t.alpha2 = a.trust_alpha2;
   // Either forgetting value (CLI or YAML) switches to continuous-time mode;
@@ -270,8 +269,8 @@ parnav::TrustConfig effectiveTrust(const parnav::TrustConfig& base,
   if (!std::isnan(a.trust_hdg_thresh)) t.gnss_hdg_thresh = a.trust_hdg_thresh;
   if (!std::isnan(a.trust_robust_k_mult))
     t.robust_k_mult = a.trust_robust_k_mult;
-  if (a.trust_gnss_veto == 0) t.gnss_veto = false;
-  if (a.trust_gnss_veto == 1) t.gnss_veto = true;
+  if (!std::isnan(a.trust_odom_thresh)) t.odom_thresh = a.trust_odom_thresh;
+  if (!std::isnan(a.trust_range_thresh)) t.range_thresh = a.trust_range_thresh;
   return t;
 }
 
@@ -318,30 +317,31 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
 
   // ---- Trust model ----
   parnav::TrustConfig trust_cfg = effectiveTrust(meta.trust, args, agent);
+  // gating_on: pre-checks (bad votes), robust kernels, ALARM1 reject windows.
+  // track: Beta counters + _trust.csv (good votes only unless gating_on).
+  const bool gating_on = trust_cfg.activate_gating;
+  const bool track = gating_on || trust_cfg.subjective_opinion;
 
-  // trust_cfg.enable == false makes this agent fully passive: robust kernels
+  // activate_gating == false makes this agent fully passive: robust kernels
   // forced off for every sensor, regardless of --robust-pos/--robust-yaw/
   // --robust-polar. This is the one place in this file where the agent's
   // resolved setting wins over an explicit CLI flag -- LOO agents used for
   // fault isolation must ingest a fault's data uncorrected (no per-agent
   // outlier rejection), otherwise ALARM1's cross-agent divergence test is
-  // itself confounded by gating. The GNSS trust veto/pre-check is already
-  // skipped when trust_cfg.enable is false (guarded below); this just closes
-  // the remaining gap (robust kernels aren't gated on trust_cfg.enable
-  // upstream).
+  // itself confounded by gating. The innovation pre-checks are already
+  // skipped when activate_gating is false (guarded below); this just closes
+  // the remaining gap (robust kernels aren't gated upstream).
   const std::string robust_pos_kind =
-      trust_cfg.enable ? args.robust_pos : "none";
+      gating_on ? args.robust_pos : "none";
   const std::string robust_yaw_kind =
-      trust_cfg.enable ? args.robust_yaw : "none";
+      gating_on ? args.robust_yaw : "none";
   const std::string robust_polar_kind =
-      trust_cfg.enable ? args.robust_polar : "none";
+      gating_on ? args.robust_polar : "none";
   const std::string robust_odom_kind =
-      trust_cfg.enable ? args.robust_odom : "none";
+      gating_on ? args.robust_odom : "none";
   const std::string robust_range_kind =
-      trust_cfg.enable ? args.robust_range : "none";
+      gating_on ? args.robust_range : "none";
 
-  parnav::TrustScalingCfg scale_cfg{trust_cfg.scaling, trust_cfg.floor,
-                                    trust_cfg.linear_k};
   parnav::SelfTrust trust(trust_cfg.alpha1, trust_cfg.alpha2);
   const bool trust_continuous =
       trust_cfg.forget_good >= 0.0 && trust_cfg.forget_bad >= 0.0;
@@ -350,11 +350,6 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
     trust.setDefaultRate(1.0 / meta.dt_nominal);
   }
 
-  // ---- Gating pass-ratio (windowed, independent of the trust EWMA) ----
-  const double gate_window_s = std::isnan(args.gate_window_s)
-                                   ? meta.gating.window_s
-                                   : args.gate_window_s;
-  parnav::GatingWindow gating(gate_window_s);
   const double assoc_gate_chi2 = std::isnan(args.assoc_gate_chi2)
                                       ? meta.gating.assoc_gate_chi2
                                       : args.assoc_gate_chi2;
@@ -521,9 +516,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
   // (real-data exports); falls back to the static per-sensor sigma_xy
   // per-axis when the array is absent or a specific entry is <= 0 (older/
   // synthetic exports have no such array at all).
-  auto build_gnss_pos_noise = [&](int s, int t, double trust_value) {
-    double k = trust_cfg.enable ? parnav::trustScale(trust_value, scale_cfg)
-                                : 1.0;
+  auto build_gnss_pos_noise = [&](int s, int t) {
     double sx = gnss_sigma_xy(s), sy = sx;
     if (d.hasGnssPosStd()) {
       auto sd = d.gnssPosStd(s, t);
@@ -531,13 +524,11 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
       if (sd[1] > 0.0) sy = sd[1];
     }
     auto base = gtsam::noiseModel::Diagonal::Sigmas(
-        (gtsam::Vector(3) << k * sx, k * sy, 0.05).finished());
+        (gtsam::Vector(3) << sx, sy, 0.05).finished());
     return wrapRobust(robust_pos_kind, args.robust_pos_k, base);
   };
-  auto build_gnss_yaw_noise = [&](int s, double trust_value) {
-    double k = trust_cfg.enable ? parnav::trustScale(trust_value, scale_cfg)
-                                : 1.0;
-    auto base = gtsam::noiseModel::Isotropic::Sigma(1, k * gnss_sigma_yaw(s));
+  auto build_gnss_yaw_noise = [&](int s) {
+    auto base = gtsam::noiseModel::Isotropic::Sigma(1, gnss_sigma_yaw(s));
     return wrapRobust(robust_yaw_kind, args.robust_yaw_k, base);
   };
 
@@ -663,7 +654,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
 
   // Residual/edge-share diagnostics — raw per-step, no windowing here
   // (windowing is done downstream in Python). Written unconditionally
-  // (independent of trust_cfg.enable): these are meant to stand alone from
+  // (independent of activate_gating): these are meant to stand alone from
   // the trust EWMA, per plan.
   auto out_stem = [&]() {
     auto dot = out_csv.find_last_of('.');
@@ -702,7 +693,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
 
   // Per-factor record for the residual/edge-share diagnostics: one entry per
   // graph.add(...) call this step (odometry excluded — diagnostics cover
-  // measurement factors only). Populated regardless of trust_cfg.enable,
+  // measurement factors only). Populated regardless of activate_gating,
   // since these outputs are meant to stand alone from the trust EWMA.
   struct FactorRecord {
     std::string sensor_key;
@@ -777,9 +768,9 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
     }
 
     // GNSS aiding — position and yaw are independent factors with independent
-    // validity masks and independent (robust) noise models. With trust on,
-    // a per-step innovation pre-check votes good/bad into SelfTrust; the
-    // post-vote trust scales the base sigma BEFORE the robust kernel wraps.
+    // validity masks and independent (robust) noise models. With gating on,
+    // a per-step innovation pre-check votes good/bad into SelfTrust (it never
+    // drops a measurement -- only ALARM1 reject windows do).
     //
     // Predictor sigma = smoother's posterior marginal at X(t-1) (captures
     // everything the smoother has already learned: landmarks, planar pin,
@@ -836,11 +827,17 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
         if (d.time[t] >= w.first && d.time[t] < w.second) return true;
       return false;
     };
-    auto rejectVote = [&](const std::string& key) {
-      if (!trust_cfg.enable) return;
+    auto voteBad = [&](const std::string& key) {
+      if (!gating_on) return;
       trust.update(key, false);
       sensors_seen_this_step.insert(key);
     };
+    auto voteGood = [&](const std::string& key) {
+      if (!track) return;
+      trust.update(key, true);
+      sensors_seen_this_step.insert(key);
+    };
+    auto rejectVote = voteBad;
 
     for (const auto& gk : gnss_keys) {
       if (isRejected(meta.gnss[gk.sensor_idx].name)) {
@@ -852,8 +849,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
       const bool has_pos = d.gnssPosValid(s, t);
       const bool has_yaw = d.gnssYawValid(s, t);
 
-      bool veto_pos = false;
-      if (trust_cfg.enable && (has_pos || has_yaw)) {
+      if (gating_on && (has_pos || has_yaw)) {
         // Innovation against the IMU prediction (decoupled from the iSAM2
         // linearization seed by construction since `pred` is built from the
         // last smoothed state).
@@ -882,9 +878,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
             pos_bad = maha_pos > trust_cfg.gnss_pos_thresh;
           }
           trust.update(gk.pos_key, !pos_bad);
-          gating.push(gk.pos_key, d.time[t], 1, pos_bad ? 0 : 1);
           sensors_seen_this_step.insert(gk.pos_key);
-          if (trust_cfg.gnss_veto && pos_bad) veto_pos = true;
         }
         if (has_yaw) {
           double dtheta = wrapPi(d.gnssYaw(s, t) - pred_yaw);
@@ -900,22 +894,26 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
             yaw_bad = (whitened * whitened) > trust_cfg.gnss_hdg_thresh;
           }
           trust.update(gk.hdg_key, !yaw_bad);
-          gating.push(gk.hdg_key, d.time[t], 1, yaw_bad ? 0 : 1);
           sensors_seen_this_step.insert(gk.hdg_key);
         }
+      } else {
+        if (has_pos) voteGood(gk.pos_key);
+        if (has_yaw) voteGood(gk.hdg_key);
       }
 
-      if (has_pos && !veto_pos) {
+      // No local veto: a sensor is only dropped by an ALARM1 reject window
+      // (isRejected above), which removes pos and heading together.
+      if (has_pos) {
         auto r = d.gnssPos(s, t);
         graph.add(gtsam::GPSFactor(X(t),
                                    gtsam::Point3(r[0], r[1], r[2]),
-                                   build_gnss_pos_noise(s, t, trust.get(gk.pos_key))));
+                                   build_gnss_pos_noise(s, t)));
         recordFactor(gk.pos_key, "pos");
       }
       if (has_yaw) {
         graph.add(parnav::CompassFactor<gtsam::Pose3>(
             X(t), d.gnssYaw(s, t),
-            build_gnss_yaw_noise(s, trust.get(gk.hdg_key))));
+            build_gnss_yaw_noise(s)));
         recordFactor(gk.hdg_key, "yaw");
       }
     }
@@ -954,14 +952,11 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
           if (sd[0] > 0.0) sp = sd[0];
           if (sd[2] > 0.0) syaw = sd[2];
         }
-        const double odom_k = trust_cfg.enable
-                             ? parnav::trustScale(trust.get(os.key), scale_cfg)
-                             : 1.0;
         // Tangent order (rx,ry,rz,tx,ty,tz): roll/pitch/z pinned tight (the
         // delta is planar by construction), yaw/x/y carry the measurement.
         auto base = gtsam::noiseModel::Diagonal::Sigmas(
-            (gtsam::Vector(6) << sig_planar, sig_planar, odom_k * syaw,
-             odom_k * sp, odom_k * sp, sig_planar)
+            (gtsam::Vector(6) << sig_planar, sig_planar, syaw, sp, sp,
+             sig_planar)
                 .finished());
         auto noise = wrapRobust(robust_odom_kind, args.robust_odom_k, base);
 
@@ -969,10 +964,25 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
                                                       noise));
         recordFactor(os.key, "odom");
 
-        if (trust_cfg.enable) {
-          trust.update(os.key, true);
-          gating.push(os.key, d.time[t], 1, 1);
+        if (gating_on) {
+          // Pre-check: measured relative motion vs the predicted one
+          // (X(ref) smoothed -> X(t) predicted), 3-DoF chi2 on (dx, dy,
+          // dyaw). Prediction sigma as for GNSS (conservative: absolute
+          // marginal + preintegration, not just the relative part).
+          const gtsam::Pose3 rel_pred =
+              smoother.calculateEstimate<gtsam::Pose3>(X(ref))
+                  .between(pred.pose());
+          const double ex = dx - rel_pred.x();
+          const double ey = dy - rel_pred.y();
+          const double eth =
+              wrapPi(delta[2] - rel_pred.rotation().rpy().z());
+          const double vxy = sp * sp + sigma_pred_xy * sigma_pred_xy;
+          const double vth = syaw * syaw + sigma_pred_yaw * sigma_pred_yaw;
+          const double maha = (ex * ex + ey * ey) / vxy + eth * eth / vth;
+          trust.update(os.key, maha <= trust_cfg.odom_thresh);
           sensors_seen_this_step.insert(os.key);
+        } else {
+          voteGood(os.key);
         }
       }
     }
@@ -990,13 +1000,11 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
         if (isRejected(rs.key)) { rejectVote(rs.key); continue; }
         int n_total = 0;
         int n_rejected = 0;
-        const double rs_scale = trust_cfg.enable
-                                     ? parnav::trustScale(trust.get(rs.key), scale_cfg)
-                                     : 1.0;
 
         if (rs.is_ship_tracker) {
           const gtsam::Pose3 observer_pose(gtsam::Rot3::Identity(), rs.world_pos);
           const gtsam::Point3 ship_xy(pred.pose().x(), pred.pose().y(), 0.0);
+          bool precheck_bad = false;
           for (int k = 0; k < d.kmax_range_marker; ++k) {
             if (!d.rangeMarkerValid(rs.sensor_idx, t, k)) continue;
             const double range_m = d.rangeMarkerReading(rs.sensor_idx, t, k);
@@ -1015,17 +1023,27 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
               double v = d.rangeMarkerStd(rs.sensor_idx, t, k);
               if (v > 0.0) sr = v;
             }
-            auto range_base = gtsam::noiseModel::Isotropic::Sigma(1, rs_scale * sr);
+            if (gating_on) {
+              // Pre-check: measured range vs range to the predicted ship.
+              const double e = range_m - std::hypot(ship_xy.x() - rs.world_pos.x(),
+                                                    ship_xy.y() - rs.world_pos.y());
+              const double v = sr * sr + sigma_pred_xy * sigma_pred_xy;
+              if (e * e / v > trust_cfg.range_thresh) precheck_bad = true;
+            }
+            auto range_base = gtsam::noiseModel::Isotropic::Sigma(1, sr);
             auto range_noise = wrapRobust(robust_range_kind, args.robust_range_k, range_base);
             graph.add(parnav::RangeFactor<gtsam::Pose3>(
                 X(t), range_noise, range_m, rs.world_pos));
             recordFactor(rs.key, "range");
           }
-          if (trust_cfg.enable && n_total > 0) {
-            const int n_accepted = n_total - n_rejected;
-            trust.update(rs.key, n_accepted > 0);
-            gating.push(rs.key, d.time[t], n_total, n_accepted);
-            sensors_seen_this_step.insert(rs.key);
+          if (n_total > 0) {
+            const bool any_accepted = n_total > n_rejected;
+            if (gating_on) {
+              trust.update(rs.key, any_accepted && !precheck_bad);
+              sensors_seen_this_step.insert(rs.key);
+            } else if (any_accepted) {
+              voteGood(rs.key);
+            }
           }
           continue;
         }
@@ -1045,7 +1063,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
               double v = d.rangeMarkerStd(rs.sensor_idx, t, k);
               if (v > 0.0) sr = v;
             }
-            auto range_base = gtsam::noiseModel::Isotropic::Sigma(1, rs_scale * sr);
+            auto range_base = gtsam::noiseModel::Isotropic::Sigma(1, sr);
             auto range_noise = wrapRobust(robust_range_kind, args.robust_range_k, range_base);
 
             if (rs.is_land) {
@@ -1079,19 +1097,10 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
             graph.add(parnav::RangeFactor<gtsam::Pose3>(
                 X(t), range_noise, range_m, ar.marker_world));
             recordFactor(rs.key, "range");
-            if (trust_cfg.enable) {
-              trust.update(rs.key, true);
-              sensors_seen_this_step.insert(rs.key);
-            }
+            voteGood(rs.key);
           }
         }
-        if (trust_cfg.enable && n_total > 0) {
-          gating.push(rs.key, d.time[t], n_total, n_total - n_rejected);
-          if (rs.is_land && ship_matched) {
-            trust.update(rs.key, true);
-            sensors_seen_this_step.insert(rs.key);
-          }
-        }
+        if (n_total > 0 && rs.is_land && ship_matched) voteGood(rs.key);
       }
     }
 
@@ -1107,20 +1116,16 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
     // matching the ship itself -- we don't care whether they also see
     // static markers. Ship-mounted sensors (plain marker association, since
     // a ship can't detect itself) get one good vote PER matched marker this
-    // step, not one aggregate vote for the whole step. Trust scale is
-    // computed once per sensor per step (not per detection) so a sensor's
-    // own inline votes this step can't feed back into its own noise before
-    // the step finishes.
+    // step, not one aggregate vote for the whole step.
     if (args.use_landmarks) {
       // sigma_range/sigma_az_rad are resolved by the caller per detection
       // (static per-sensor value, or the npz's per-detection _std when
       // present and positive) before this is invoked.
-      auto build_polar_noises = [&](double sigma_range, double sigma_az_rad,
-                                    double scale) {
+      auto build_polar_noises = [&](double sigma_range, double sigma_az_rad) {
         auto range_base = gtsam::noiseModel::Isotropic::Sigma(
-            1, scale * sigma_range);
+            1, sigma_range);
         auto az_base = gtsam::noiseModel::Isotropic::Sigma(
-            1, scale * sigma_az_rad);
+            1, sigma_az_rad);
         return std::pair<gtsam::SharedNoiseModel, gtsam::SharedNoiseModel>{
             wrapRobust(robust_polar_kind, args.robust_polar_k, range_base),
             wrapRobust(robust_polar_kind, args.robust_polar_k, az_base)};
@@ -1150,9 +1155,6 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
         if (isRejected(ps.key)) { rejectVote(ps.key); continue; }
         int n_total = 0;
         int n_rejected = 0;
-        const double ps_scale = trust_cfg.enable
-                                     ? parnav::trustScale(trust.get(ps.key), scale_cfg)
-                                     : 1.0;
 
         if (ps.is_ship_tracker) {
           // Ship-tracking sensor (e.g. NTNU_bluetooth): the simulator's
@@ -1185,7 +1187,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
             }
 
             auto [sr, sa] = polar_marker_sigmas(ps, t, k);
-            auto [range_noise, az_noise] = build_polar_noises(sr, sa, ps_scale);
+            auto [range_noise, az_noise] = build_polar_noises(sr, sa);
             graph.add(parnav::RangeFactor<gtsam::Pose3>(
                 X(t), range_noise, range_m, ps.world_pos));
             recordFactor(ps.key, "range");
@@ -1193,11 +1195,9 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
                 X(t), az_noise, az_rad, ps.world_pos, R_rn));
             recordFactor(ps.key, "az");
           }
-          if (trust_cfg.enable && n_total > 0) {
-            const int n_accepted = n_total - n_rejected;
-            trust.update(ps.key, n_accepted > 0);
-            gating.push(ps.key, d.time[t], n_total, n_accepted);
-            sensors_seen_this_step.insert(ps.key);
+          if (n_total > 0) {
+            if (n_total > n_rejected) voteGood(ps.key);
+            else voteBad(ps.key);
           }
           continue;
         }
@@ -1238,7 +1238,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
                 continue;
               }
               auto [sr, sa] = polar_marker_sigmas(ps, t, k);
-              auto [range_noise, az_noise] = build_polar_noises(sr, sa, ps_scale);
+              auto [range_noise, az_noise] = build_polar_noises(sr, sa);
               if (ar.is_ship) {
                 ship_matched = true;
                 const gtsam::Matrix3 R_rn =
@@ -1268,7 +1268,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
               continue;
             }
             auto [sr, sa] = polar_marker_sigmas(ps, t, k);
-            auto [range_noise, az_noise] = build_polar_noises(sr, sa, ps_scale);
+            auto [range_noise, az_noise] = build_polar_noises(sr, sa);
             graph.add(parnav::RangeFactor<gtsam::Pose3>(
                 X(t), range_noise, range_m, ar.marker_world));
             recordFactor(ps.key, "range");
@@ -1277,10 +1277,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
             recordFactor(ps.key, "az");
             // Ship's own sensor: one good vote per matched marker, not one
             // aggregate vote for the whole step.
-            if (trust_cfg.enable) {
-              trust.update(ps.key, true);
-              sensors_seen_this_step.insert(ps.key);
-            }
+            voteGood(ps.key);
           }
         }
 
@@ -1308,22 +1305,18 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
               continue;
             }
             auto [sr, sa] = polar_shoreline_sigmas(ps, t, k);
-            auto [range_noise, az_noise] = build_polar_noises(sr, sa, ps_scale);
+            auto [range_noise, az_noise] = build_polar_noises(sr, sa);
             graph.add(parnav::RangeFactor<gtsam::Pose3>(
                 X(t), range_noise, range_m, ar.marker_world));
             recordFactor(ps.key, "range");
             graph.add(parnav::MarkerAzimuthFactor<gtsam::Pose3>(
                 X(t), az_noise, az_rad, ar.marker_world, ps.yaw_offset_rad));
             recordFactor(ps.key, "az");
-            if (trust_cfg.enable && !ps.is_land) {
-              trust.update(ps.key, true);
-              sensors_seen_this_step.insert(ps.key);
-            }
+            if (!ps.is_land) voteGood(ps.key);
           }
         }
 
-        if (trust_cfg.enable && n_total > 0) {
-          gating.push(ps.key, d.time[t], n_total, n_total - n_rejected);
+        if (n_total > 0) {
           // Land sensors: no reliable "bad" signal without FOV/LOS-
           // awareness (clutter/markers can produce an all-reject-of-ship
           // step even when the ship was genuinely out of range or
@@ -1333,10 +1326,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
           // and decays toward neutral below, same as a silent sensor.
           // Revisit once FOV-aware disbelief lands. Ship-mounted sensors
           // already voted inline above, per matched marker.
-          if (ps.is_land && ship_matched) {
-            trust.update(ps.key, true);
-            sensors_seen_this_step.insert(ps.key);
-          }
+          if (ps.is_land && ship_matched) voteGood(ps.key);
         }
       }
     }
@@ -1356,9 +1346,6 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
       for (const auto& cs : camera_sensors) {
         if (isRejected(cs.key)) { rejectVote(cs.key); continue; }
         int n_total = 0, n_rejected = 0;
-        const double cs_scale = trust_cfg.enable
-                                     ? parnav::trustScale(trust.get(cs.key), scale_cfg)
-                                     : 1.0;
         const gtsam::Pose3 observer_pose =
             cs.is_land ? gtsam::Pose3(gtsam::Rot3::Identity(), cs.world_pos)
                       : pred.pose();
@@ -1373,7 +1360,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
             double v = d.cameraStd(cs.sensor_idx, t, k);
             if (v > 0.0) sa = v;
           }
-          auto az_base = gtsam::noiseModel::Isotropic::Sigma(1, cs_scale * sa);
+          auto az_base = gtsam::noiseModel::Isotropic::Sigma(1, sa);
           auto az_noise =
               wrapRobust(robust_polar_kind, args.robust_polar_k, az_base);
 
@@ -1406,24 +1393,15 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
               X(t), az_noise, az_rad, ar.marker_world, cs.yaw_offset_rad));
           recordFactor(cs.key, "az");
           // Ship's own sensor: one good vote per matched marker.
-          if (trust_cfg.enable) {
-            trust.update(cs.key, true);
-            sensors_seen_this_step.insert(cs.key);
-          }
+          voteGood(cs.key);
         }
-        if (trust_cfg.enable && n_total > 0) {
-          gating.push(cs.key, d.time[t], n_total, n_total - n_rejected);
-          if (cs.is_land && ship_matched) {
-            trust.update(cs.key, true);
-            sensors_seen_this_step.insert(cs.key);
-          }
-        }
+        if (n_total > 0 && cs.is_land && ship_matched) voteGood(cs.key);
       }
     }
 
     // Decay forgetting for known sensors that didn't fire this step so trust
     // drifts back toward the prior.
-    if (trust_cfg.enable) {
+    if (track) {
       for (const auto& gk : gnss_keys) {
         if (!sensors_seen_this_step.count(gk.pos_key)) trust.decay(gk.pos_key);
         if (!sensors_seen_this_step.count(gk.hdg_key)) trust.decay(gk.hdg_key);
@@ -1441,7 +1419,6 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
         if (!sensors_seen_this_step.count(rs.key)) trust.decay(rs.key);
       }
       trust.record();
-      gating.record();
     }
 
     timestamps[X(t)] = d.time[t];
@@ -1517,7 +1494,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
   eout.close();
   std::printf("Wrote %s (edges)\n", (out_stem + "_edges.csv").c_str());
 
-  if (trust_cfg.enable) {
+  if (track) {
     std::string trust_path = out_stem + "_trust.csv";
     std::ofstream tout(trust_path);
     tout << "t,sensor,belief,disbelief,uncertainty,agent_id\n";
@@ -1533,21 +1510,6 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
     tout.close();
     std::printf("Wrote %s (trust history, %zu steps)\n", trust_path.c_str(),
                 hist.size());
-
-    std::string gating_path = out_stem + "_gating.csv";
-    std::ofstream gout(gating_path);
-    gout << "t,sensor,pass_ratio,n_window,agent_id\n";
-    const auto& ghist = gating.history();
-    for (std::size_t k = 0; k < ghist.size(); ++k) {
-      const double tk = d.time[k + 1];
-      for (const auto& kv : ghist[k]) {
-        gout << tk << ',' << kv.first << ',' << kv.second.pass_ratio << ','
-             << kv.second.n_window << ',' << agent_col << '\n';
-      }
-    }
-    gout.close();
-    std::printf("Wrote %s (gating history, %zu steps)\n", gating_path.c_str(),
-                ghist.size());
   }
 }
 

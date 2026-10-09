@@ -175,22 +175,20 @@ SimMeta loadSimMeta(const std::string& json_path) {
 
   if (j.contains("trust")) {
     const auto& t = j.at("trust");
-    m.trust.enable = t.value("enable", false);
-    m.trust.scaling = t.value("scaling", std::string{"inverse"});
-    m.trust.floor = t.value("floor", 0.001);
-    m.trust.linear_k = t.value("linear_k", 5.0);
+    m.trust.activate_gating = t.value("activate_gating", false);
+    m.trust.subjective_opinion = t.value("subjective_opinion", false);
     m.trust.alpha1 = t.value("alpha1", 0.9);
     m.trust.alpha2 = t.value("alpha2", 0.99);
     m.trust.forget_good = t.value("forget_good", -1.0);
     m.trust.forget_bad = t.value("forget_bad", -1.0);
     m.trust.gnss_pos_thresh = t.value("gnss_pos_thresh", 5.99);
     m.trust.gnss_hdg_thresh = t.value("gnss_hdg_thresh", 3.84);
+    m.trust.odom_thresh = t.value("odom_thresh", 7.81);
+    m.trust.range_thresh = t.value("range_thresh", 3.84);
     m.trust.robust_k_mult = t.value("robust_k_mult", 3.0);
-    m.trust.gnss_veto = t.value("gnss_veto", false);
   }
 
   if (j.contains("gating")) {
-    m.gating.window_s = j.at("gating").value("window_s", 10.0);
     m.gating.assoc_gate_chi2 = j.at("gating").value("assoc_gate_chi2", 5.99);
   }
 
@@ -210,8 +208,12 @@ SimMeta loadSimMeta(const std::string& json_path) {
       if (a.contains("sensors") && !a.at("sensors").is_null()) {
         am.sensors = a.at("sensors").get<std::vector<std::string>>();
       }
-      if (a.contains("trust_enable") && !a.at("trust_enable").is_null()) {
-        am.trust_enable = a.at("trust_enable").get<bool>();
+      if (a.contains("activate_gating") && !a.at("activate_gating").is_null()) {
+        am.activate_gating = a.at("activate_gating").get<bool>();
+      }
+      if (a.contains("subjective_opinion") &&
+          !a.at("subjective_opinion").is_null()) {
+        am.subjective_opinion = a.at("subjective_opinion").get<bool>();
       }
       m.agents.push_back(std::move(am));
     }

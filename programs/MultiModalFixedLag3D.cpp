@@ -305,6 +305,16 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
   auto gnss_pos_base = gtsam::noiseModel::Diagonal::Sigmas(
       (gtsam::Vector(3) << sigma_xy, sigma_xy, 0.05).finished());
   auto gnss_yaw_base = gtsam::noiseModel::Isotropic::Sigma(1, sigma_yaw);
+  // Per-GNSS-sensor sigmas (e.g. a lidar-to-map localizer exported as GNSS has
+  // its own noise); the first-GNSS values above stay as fallback + prior seed.
+  auto gnss_sigma_xy = [&](int s) {
+    const double v = meta.gnss[s].noise_xy;
+    return v > 0.0 ? v : sigma_xy;
+  };
+  auto gnss_sigma_yaw = [&](int s) {
+    const double v = meta.gnss[s].noise_heading;
+    return v > 0.0 ? v : sigma_yaw;
+  };
 
   // ---- Trust model ----
   parnav::TrustConfig trust_cfg = effectiveTrust(meta.trust, args, agent);
@@ -514,7 +524,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
   auto build_gnss_pos_noise = [&](int s, int t, double trust_value) {
     double k = trust_cfg.enable ? parnav::trustScale(trust_value, scale_cfg)
                                 : 1.0;
-    double sx = sigma_xy, sy = sigma_xy;
+    double sx = gnss_sigma_xy(s), sy = sx;
     if (d.hasGnssPosStd()) {
       auto sd = d.gnssPosStd(s, t);
       if (sd[0] > 0.0) sx = sd[0];
@@ -524,10 +534,10 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
         (gtsam::Vector(3) << k * sx, k * sy, 0.05).finished());
     return wrapRobust(robust_pos_kind, args.robust_pos_k, base);
   };
-  auto build_gnss_yaw_noise = [&](double trust_value) {
+  auto build_gnss_yaw_noise = [&](int s, double trust_value) {
     double k = trust_cfg.enable ? parnav::trustScale(trust_value, scale_cfg)
                                 : 1.0;
-    auto base = gtsam::noiseModel::Isotropic::Sigma(1, k * sigma_yaw);
+    auto base = gtsam::noiseModel::Isotropic::Sigma(1, k * gnss_sigma_yaw(s));
     return wrapRobust(robust_yaw_kind, args.robust_yaw_k, base);
   };
 
@@ -860,7 +870,8 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
           auto r = d.gnssPos(s, t);
           double dx = r[0] - pred_x;
           double dy = r[1] - pred_y;
-          double sx = std::sqrt(sigma_xy * sigma_xy +
+          const double sig_xy_s = gnss_sigma_xy(s);
+          double sx = std::sqrt(sig_xy_s * sig_xy_s +
                                 sigma_pred_xy * sigma_pred_xy);
           double maha_pos = (dx * dx + dy * dy) / (sx * sx);
           bool pos_bad;
@@ -877,7 +888,8 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
         }
         if (has_yaw) {
           double dtheta = wrapPi(d.gnssYaw(s, t) - pred_yaw);
-          double sth = std::sqrt(sigma_yaw * sigma_yaw +
+          const double sig_yaw_s = gnss_sigma_yaw(s);
+          double sth = std::sqrt(sig_yaw_s * sig_yaw_s +
                                  sigma_pred_yaw * sigma_pred_yaw);
           double whitened = std::abs(dtheta / sth);
           bool yaw_bad;
@@ -903,7 +915,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
       if (has_yaw) {
         graph.add(parnav::CompassFactor<gtsam::Pose3>(
             X(t), d.gnssYaw(s, t),
-            build_gnss_yaw_noise(trust.get(gk.hdg_key))));
+            build_gnss_yaw_noise(s, trust.get(gk.hdg_key))));
         recordFactor(gk.hdg_key, "yaw");
       }
     }

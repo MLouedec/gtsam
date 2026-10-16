@@ -545,9 +545,6 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
   // first GNSS fix, so the position/yaw prior is set at GNSS confidence while
   // (z, roll, pitch) stay pinned to the planar manifold. Velocity is a rough
   // first-difference of GNSS, kept loose so it does not over-constrain.
-  auto pose_prior_noise = gtsam::noiseModel::Diagonal::Sigmas(
-      (gtsam::Vector(6) << 1e-3, 1e-3, sigma_yaw, sigma_xy, sigma_xy, 1e-3)
-          .finished());
   auto vel_prior_noise = gtsam::noiseModel::Isotropic::Sigma(3, 2.0);
   auto bias_prior_noise = gtsam::noiseModel::Isotropic::Sigma(6, 1e-3);
 
@@ -590,13 +587,20 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
     if (gm.ship == ship || gm.ship == -1) { s0 = s; break; }
   }
 
-  double x0 = 0.0, y0 = 0.0, yaw0 = 0.0;
+  double x0 = 0.0, y0 = 0.0, yaw0 = 0.0, sigma_yaw0 = sigma_yaw;
   if (s0 >= 0) {
     for (int t = 0; t < T; ++t)
       if (d.gnssPosValid(s0, t)) { auto r = d.gnssPos(s0, t); x0 = r[0]; y0 = r[1]; break; }
-    for (int t = 0; t < T; ++t)
-      if (d.gnssYawValid(s0, t)) { yaw0 = d.gnssYaw(s0, t); break; }
   }
+  // Yaw seed: first valid heading from any of this ship's GNSS-type sensors
+  // (e.g. lidar_2_map when gnss_1 carries no heading).
+  for (int t = 0, found = 0; t < T && !found; ++t)
+    for (int s = 0; s < d.n_gnss; ++s) {
+      const auto& gm = meta.gnss[s];
+      if ((gm.ship == ship || gm.ship == -1) && d.gnssYawValid(s, t)) {
+        yaw0 = d.gnssYaw(s, t); sigma_yaw0 = gnss_sigma_yaw(s); found = 1; break;
+      }
+    }
   gtsam::Pose3 pose0(gtsam::Rot3::Yaw(yaw0), gtsam::Point3(x0, y0, 0.0));
 
   // Velocity seed: first-difference of the first two valid GNSS fixes.
@@ -615,6 +619,9 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
   }
   gtsam::imuBias::ConstantBias bias0;
 
+  auto pose_prior_noise = gtsam::noiseModel::Diagonal::Sigmas(
+      (gtsam::Vector(6) << 1e-3, 1e-3, sigma_yaw0, sigma_xy, sigma_xy, 1e-3)
+          .finished());
   graph.addPrior<gtsam::Pose3>(X(0), pose0, pose_prior_noise);
   graph.addPrior<gtsam::Vector3>(V(0), v0, vel_prior_noise);
   graph.addPrior<gtsam::imuBias::ConstantBias>(B(0), bias0, bias_prior_noise);

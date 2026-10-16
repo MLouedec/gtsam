@@ -37,6 +37,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -88,6 +89,9 @@ struct Args {
   // Association gate override (sentinel: NaN means "use sidecar value",
   // meta.gating.assoc_gate_chi2, default 5.99 = 2-DoF χ² @ 95%).
   double assoc_gate_chi2 = std::nan("");
+  // Land polar sensors: gate with the per-detection sigma (not the static
+  // config one) and keep only the best in-gate detection per sensor per step.
+  int assoc_tight = 0;
   // Trust overrides (sentinel: empty / NaN means "use sidecar value")
   int activate_gating = -1;           // -1 keep, 0 force off, 1 force on
   int subjective_opinion = -1;        // -1 keep, 0 force off, 1 force on
@@ -160,6 +164,7 @@ Args parseArgs(int argc, char** argv) {
     else if (k == "--no-range") a.use_range = 0;
     else if (k == "--range") a.use_range = 1;
     else if (k == "--assoc-gate-chi2") a.assoc_gate_chi2 = std::stod(next());
+    else if (k == "--assoc-tight") a.assoc_tight = 1;
     else if (k == "--agent-id") a.agent_id = next();
     else if (k == "--reject-episodes") a.reject_episodes_csv = next();
     else if (k == "-h" || k == "--help") {
@@ -176,7 +181,7 @@ Args parseArgs(int argc, char** argv) {
           << "  [--trust-odom-thresh CHI2] [--trust-range-thresh CHI2]\n"
           << "  [--trust-robust-k-mult K]\n"
           << "  [--landmarks | --no-landmarks] [--shoreline | --no-shoreline]\n"
-          << "  [--camera | --no-camera] [--assoc-gate-chi2 CHI2]\n"
+          << "  [--camera | --no-camera] [--assoc-gate-chi2 CHI2] [--assoc-tight]\n"
           << "  [--robust-polar none|huber|tukey|gmc] [--robust-polar-k K]\n"
           << "  [--odom | --no-odom] [--robust-odom none|huber|tukey|gmc]\n"
           << "  [--robust-odom-k K]\n"
@@ -1219,6 +1224,27 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
         // inline right here.
         bool ship_matched = false;
         if (d.n_markers > 0 || ps.is_land) {
+          // --assoc-tight: pre-pass picks the lowest-Mahalanobis in-gate
+          // detection (per-detection sigma); the loop below adds factors
+          // for that one only.
+          const bool tight = args.assoc_tight && ps.is_land;
+          int k_best = -1;
+          if (tight) {
+            double best_maha = std::numeric_limits<double>::infinity();
+            const gtsam::Point3 ship_xy(pred.pose().x(), pred.pose().y(), 0.0);
+            for (int k = 0; k < d.kmax_polar_marker; ++k) {
+              if (!d.polarMarkerValid(ps.sensor_idx, t, k)) continue;
+              auto rd = d.polarMarkerReading(ps.sensor_idx, t, k);
+              auto [sr, sa] = polar_marker_sigmas(ps, t, k);
+              parnav::LandAssocResult ar = parnav::associateMarkerOrShip(
+                  observer_pose, ps.yaw_offset_rad, rd[0], rd[1], sr, sa,
+                  d.markers, d.n_markers, ship_xy, assoc_gate_chi2);
+              if (ar.matched && ar.maha < best_maha) {
+                best_maha = ar.maha;
+                k_best = k;
+              }
+            }
+          }
           for (int k = 0; k < d.kmax_polar_marker; ++k) {
             if (!d.polarMarkerValid(ps.sensor_idx, t, k)) continue;
             auto rd = d.polarMarkerReading(ps.sensor_idx, t, k);
@@ -1227,11 +1253,17 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
             ++n_total;
 
             if (ps.is_land) {
+              if (tight && k != k_best) {
+                ++n_rejected;
+                continue;
+              }
               const gtsam::Point3 ship_xy(pred.pose().x(), pred.pose().y(), 0.0);
+              const auto [gr, ga] = tight ? polar_marker_sigmas(ps, t, k)
+                                          : std::pair<double, double>{
+                                                ps.sigma_range, ps.sigma_az_rad};
               parnav::LandAssocResult ar = parnav::associateMarkerOrShip(
-                  observer_pose, ps.yaw_offset_rad, range_m, az_rad,
-                  ps.sigma_range, ps.sigma_az_rad, d.markers, d.n_markers,
-                  ship_xy, assoc_gate_chi2);
+                  observer_pose, ps.yaw_offset_rad, range_m, az_rad, gr, ga,
+                  d.markers, d.n_markers, ship_xy, assoc_gate_chi2);
               if (!ar.matched) {
                 ++n_rejected;
                 continue;

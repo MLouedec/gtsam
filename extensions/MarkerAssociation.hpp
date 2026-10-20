@@ -14,6 +14,15 @@
 
 namespace parnav {
 
+// Optional `var_xy` [m^2] / `var_yaw` [rad^2]: variance of the predicted pose
+// of the uncertain party (ship pose for ship-mounted sensors, ship position
+// estimate for the ship hypothesis of land sensors; yaw only matters for
+// ship-mounted bearings). Both 0 (default) gives the plain measurement-
+// covariance Mahalanobis distance; otherwise the distance is the NIS
+// nu^T S^-1 nu with S = R + H P H^T (isotropic xy, no cross terms):
+//   S_rr = sigma_r^2 + var_xy
+//   S_aa = sigma_a^2 + var_xy / rho^2 + var_yaw
+
 struct AssocResult {
   int marker_idx{-1};      // -1 if no marker accepted
   double maha{0.0};         // Mahalanobis distance squared (range² + az²)
@@ -34,7 +43,8 @@ AssocResult associateMarker(
     const gtsam::Pose3& ship_pose, double sensor_yaw_offset_rad,
     double range_m, double azimuth_rad, double sigma_range_m,
     double sigma_az_rad, const std::vector<double>& markers,
-    int n_markers, double gate_chi2 = 5.99);
+    int n_markers, double gate_chi2 = 5.99,
+    double var_xy = 0.0, double var_yaw = 0.0);
 
 // Associate a shoreline detection to the nearest shoreline segment, then
 // snap to the closest point on that segment. The "virtual marker" returned
@@ -48,7 +58,8 @@ AssocResult associateShoreline(
     const gtsam::Pose3& ship_pose, double sensor_yaw_offset_rad,
     double range_m, double azimuth_rad, double sigma_range_m,
     double sigma_az_rad, const std::vector<double>& shoreline,
-    int n_shoreline, double gate_chi2 = 5.99);
+    int n_shoreline, double gate_chi2 = 5.99,
+    double var_xy = 0.0, double var_yaw = 0.0);
 
 // Bearing-only association for a camera detection (no range). Matches the
 // bearing to the nearest marker by angular residual alone.
@@ -58,7 +69,8 @@ AssocResult associateMarkerBearing(
     const gtsam::Pose3& ship_pose, double sensor_yaw_offset_rad,
     double azimuth_rad, double sigma_az_rad,
     const std::vector<double>& markers, int n_markers,
-    double gate_chi2 = 3.84);
+    double gate_chi2 = 3.84,
+    double var_xy = 0.0, double var_yaw = 0.0);
 
 // Result of testing a land sensor's detection against both a marker pool
 // and the current ship-position estimate — land sensors' raw detection
@@ -92,14 +104,16 @@ LandAssocResult associateMarkerOrShip(
     const gtsam::Pose3& observer_pose, double sensor_yaw_offset_rad,
     double range_m, double azimuth_rad, double sigma_range_m,
     double sigma_az_rad, const std::vector<double>& markers, int n_markers,
-    const gtsam::Point3& ship_position_estimate, double gate_chi2 = 5.99);
+    const gtsam::Point3& ship_position_estimate, double gate_chi2 = 5.99,
+    double var_xy = 0.0, double var_yaw = 0.0);
 
 // Bearing-only version, for land-mounted Camera sensors (land_ir_cam).
 LandAssocResult associateMarkerBearingOrShip(
     const gtsam::Pose3& observer_pose, double sensor_yaw_offset_rad,
     double azimuth_rad, double sigma_az_rad,
     const std::vector<double>& markers, int n_markers,
-    const gtsam::Point3& ship_position_estimate, double gate_chi2 = 3.84);
+    const gtsam::Point3& ship_position_estimate, double gate_chi2 = 3.84,
+    double var_xy = 0.0, double var_yaw = 0.0);
 
 // Range-only association for a ship-mounted range sensor (no bearing).
 // `gate_chi2`: χ² cutoff for the 1-DoF gate (default 3.84 @ 95%).
@@ -107,7 +121,8 @@ LandAssocResult associateMarkerBearingOrShip(
 AssocResult associateMarkerRangeOnly(
     const gtsam::Pose3& ship_pose, double range_m, double sigma_range_m,
     const std::vector<double>& markers, int n_markers,
-    double gate_chi2 = 3.84);
+    double gate_chi2 = 3.84,
+    double var_xy = 0.0, double var_yaw = 0.0);
 
 // Range-only hybrid marker-or-ship association for land-mounted range
 // sensors: same reasoning as associateMarkerOrShip (raw stream mixes
@@ -116,6 +131,7 @@ AssocResult associateMarkerRangeOnly(
 LandAssocResult associateMarkerOrShipRangeOnly(
     const gtsam::Pose3& observer_pose, double range_m, double sigma_range_m,
     const std::vector<double>& markers, int n_markers,
-    const gtsam::Point3& ship_position_estimate, double gate_chi2 = 3.84);
+    const gtsam::Point3& ship_position_estimate, double gate_chi2 = 3.84,
+    double var_xy = 0.0, double var_yaw = 0.0);
 
 }  // namespace parnav

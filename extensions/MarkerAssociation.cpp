@@ -2,17 +2,30 @@
 
 #include "utils.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
 namespace parnav {
+
+namespace {
+// Innovation variances for a candidate at distance `rho`.
+inline double rangeVar(double sigma_r2, double var_xy) {
+  return sigma_r2 + var_xy;
+}
+inline double azVar(double sigma_az2, double var_xy, double var_yaw,
+                    double rho) {
+  return sigma_az2 + var_xy / std::max(rho * rho, 1e-9) + var_yaw;
+}
+}  // namespace
 
 AssocResult associateMarker(const gtsam::Pose3& ship_pose,
                             double sensor_yaw_offset_rad, double range_m,
                             double azimuth_rad, double sigma_range_m,
                             double sigma_az_rad,
                             const std::vector<double>& markers, int n_markers,
-                            double gate_chi2) {
+                            double gate_chi2, double var_xy,
+    double var_yaw) {
   AssocResult best;
   best.maha = std::numeric_limits<double>::infinity();
 
@@ -35,7 +48,8 @@ AssocResult associateMarker(const gtsam::Pose3& ship_pose,
 
     const double dr = range_m - pred_range;
     const double da = ssa(azimuth_rad - pred_az_sensor);
-    const double maha = (dr * dr) / sigma_r2 + (da * da) / sigma_az2;
+    const double maha = (dr * dr) / rangeVar(sigma_r2, var_xy) +
+                        (da * da) / azVar(sigma_az2, var_xy, var_yaw, pred_range);
 
     if (maha < best.maha) {
       best.maha = maha;
@@ -55,7 +69,8 @@ AssocResult associateShoreline(const gtsam::Pose3& ship_pose,
                                double azimuth_rad, double sigma_range_m,
                                double sigma_az_rad,
                                const std::vector<double>& shoreline,
-                               int n_shoreline, double gate_chi2) {
+                               int n_shoreline, double gate_chi2, double var_xy,
+    double var_yaw) {
   AssocResult best;
   best.maha = std::numeric_limits<double>::infinity();
 
@@ -100,7 +115,8 @@ AssocResult associateShoreline(const gtsam::Pose3& ship_pose,
 
     const double dr = range_m - pred_range;
     const double da = ssa(azimuth_rad - pred_az_sensor);
-    const double maha = (dr * dr) / sigma_r2 + (da * da) / sigma_az2;
+    const double maha = (dr * dr) / rangeVar(sigma_r2, var_xy) +
+                        (da * da) / azVar(sigma_az2, var_xy, var_yaw, pred_range);
 
     if (maha < best.maha) {
       best.maha = maha;
@@ -119,7 +135,8 @@ AssocResult associateMarkerBearing(const gtsam::Pose3& ship_pose,
                                    double sensor_yaw_offset_rad,
                                    double azimuth_rad, double sigma_az_rad,
                                    const std::vector<double>& markers,
-                                   int n_markers, double gate_chi2) {
+                                   int n_markers, double gate_chi2, double var_xy,
+    double var_yaw) {
   AssocResult best;
   best.maha = std::numeric_limits<double>::infinity();
 
@@ -135,7 +152,8 @@ AssocResult associateMarkerBearing(const gtsam::Pose3& ship_pose,
     const double pred_az_world = std::atan2(my - sy, mx - sx);
     const double pred_az_sensor = ssa(pred_az_world - sensor_yaw_w);
     const double da = ssa(azimuth_rad - pred_az_sensor);
-    const double maha = (da * da) / sigma_az2;
+    const double rho = std::hypot(mx - sx, my - sy);
+    const double maha = (da * da) / azVar(sigma_az2, var_xy, var_yaw, rho);
 
     if (maha < best.maha) {
       best.maha = maha;
@@ -154,7 +172,8 @@ LandAssocResult associateMarkerOrShip(
     const gtsam::Pose3& observer_pose, double sensor_yaw_offset_rad,
     double range_m, double azimuth_rad, double sigma_range_m,
     double sigma_az_rad, const std::vector<double>& markers, int n_markers,
-    const gtsam::Point3& ship_position_estimate, double gate_chi2) {
+    const gtsam::Point3& ship_position_estimate, double gate_chi2, double var_xy,
+    double var_yaw) {
   LandAssocResult best;
   best.maha = std::numeric_limits<double>::infinity();
 
@@ -174,7 +193,9 @@ LandAssocResult associateMarkerOrShip(
     const double pred_az_sensor = ssa(pred_az_world - sensor_yaw_w);
     const double dr = range_m - pred_range;
     const double da = ssa(azimuth_rad - pred_az_sensor);
-    const double maha = (dr * dr) / sigma_r2 + (da * da) / sigma_az2;
+    const double vxy = is_ship ? var_xy : 0.0;
+    const double maha = (dr * dr) / rangeVar(sigma_r2, vxy) +
+                        (da * da) / azVar(sigma_az2, vxy, 0.0, pred_range);
     if (maha < best.maha) {
       best.maha = maha;
       best.is_ship = is_ship;
@@ -195,7 +216,8 @@ LandAssocResult associateMarkerBearingOrShip(
     const gtsam::Pose3& observer_pose, double sensor_yaw_offset_rad,
     double azimuth_rad, double sigma_az_rad,
     const std::vector<double>& markers, int n_markers,
-    const gtsam::Point3& ship_position_estimate, double gate_chi2) {
+    const gtsam::Point3& ship_position_estimate, double gate_chi2, double var_xy,
+    double var_yaw) {
   LandAssocResult best;
   best.maha = std::numeric_limits<double>::infinity();
 
@@ -209,7 +231,9 @@ LandAssocResult associateMarkerBearingOrShip(
     const double pred_az_world = std::atan2(my - sy, mx - sx);
     const double pred_az_sensor = ssa(pred_az_world - sensor_yaw_w);
     const double da = ssa(azimuth_rad - pred_az_sensor);
-    const double maha = (da * da) / sigma_az2;
+    const double vxy = is_ship ? var_xy : 0.0;
+    const double maha = (da * da) /
+        azVar(sigma_az2, vxy, 0.0, std::hypot(mx - sx, my - sy));
     if (maha < best.maha) {
       best.maha = maha;
       best.is_ship = is_ship;
@@ -229,7 +253,8 @@ LandAssocResult associateMarkerBearingOrShip(
 AssocResult associateMarkerRangeOnly(const gtsam::Pose3& ship_pose,
                                      double range_m, double sigma_range_m,
                                      const std::vector<double>& markers,
-                                     int n_markers, double gate_chi2) {
+                                     int n_markers, double gate_chi2, double var_xy,
+    double var_yaw) {
   AssocResult best;
   best.maha = std::numeric_limits<double>::infinity();
 
@@ -242,7 +267,7 @@ AssocResult associateMarkerRangeOnly(const gtsam::Pose3& ship_pose,
     const double my = markers[i * 3 + 1];
     const double pred_range = std::hypot(mx - sx, my - sy);
     const double dr = range_m - pred_range;
-    const double maha = (dr * dr) / sigma_r2;
+    const double maha = (dr * dr) / rangeVar(sigma_r2, var_xy);
     if (maha < best.maha) {
       best.maha = maha;
       best.marker_idx = i;
@@ -259,7 +284,8 @@ AssocResult associateMarkerRangeOnly(const gtsam::Pose3& ship_pose,
 LandAssocResult associateMarkerOrShipRangeOnly(
     const gtsam::Pose3& observer_pose, double range_m, double sigma_range_m,
     const std::vector<double>& markers, int n_markers,
-    const gtsam::Point3& ship_position_estimate, double gate_chi2) {
+    const gtsam::Point3& ship_position_estimate, double gate_chi2, double var_xy,
+    double var_yaw) {
   LandAssocResult best;
   best.maha = std::numeric_limits<double>::infinity();
 
@@ -270,7 +296,7 @@ LandAssocResult associateMarkerOrShipRangeOnly(
   auto testCandidate = [&](double mx, double my, bool is_ship) {
     const double pred_range = std::hypot(mx - sx, my - sy);
     const double dr = range_m - pred_range;
-    const double maha = (dr * dr) / sigma_r2;
+    const double maha = (dr * dr) / rangeVar(sigma_r2, is_ship ? var_xy : 0.0);
     if (maha < best.maha) {
       best.maha = maha;
       best.is_ship = is_ship;

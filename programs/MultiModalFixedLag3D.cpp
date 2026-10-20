@@ -62,9 +62,9 @@ struct Args {
   int ship_index = 0;
   double lag = 5.0;
   std::string out_csv = "multimodal_estimates.csv";
-  std::string robust_pos = "none";   // none | huber | tukey | gmc
+  std::string robust_pos = "gmc";    // none | huber | tukey | gmc
   double robust_pos_k = 1.345;
-  std::string robust_yaw = "none";
+  std::string robust_yaw = "gmc";
   double robust_yaw_k = 1.345;
   std::string robust_polar = "gmc";  // default: robustify marker factors.
                                      // Mis-associations/jamming produce outlier
@@ -82,7 +82,7 @@ struct Args {
   double robust_odom_k = 1.345;
   int use_odom = 0;                   // 0 off (default): relative-pose
                                       // odometry factors; opt in with --odom.
-  std::string robust_range = "none";
+  std::string robust_range = "gmc";
   double robust_range_k = 1.345;
   int use_range = 0;                  // 0 off (default): range-only
                                       // factors; opt in with --range.
@@ -92,6 +92,9 @@ struct Args {
   // Land polar sensors: gate with the per-detection sigma (not the static
   // config one) and keep only the best in-gate detection per sensor per step.
   int assoc_tight = 0;
+  // Association gate on the NIS with innovation covariance S = R + H P H^T
+  // (predicted-pose variance added) instead of the measurement covariance R.
+  int assoc_innovation = 0;
   // Trust overrides (sentinel: empty / NaN means "use sidecar value")
   int activate_gating = -1;           // -1 keep, 0 force off, 1 force on
   int subjective_opinion = -1;        // -1 keep, 0 force off, 1 force on
@@ -165,6 +168,7 @@ Args parseArgs(int argc, char** argv) {
     else if (k == "--range") a.use_range = 1;
     else if (k == "--assoc-gate-chi2") a.assoc_gate_chi2 = std::stod(next());
     else if (k == "--assoc-tight") a.assoc_tight = 1;
+    else if (k == "--assoc-innovation") a.assoc_innovation = 1;
     else if (k == "--agent-id") a.agent_id = next();
     else if (k == "--reject-episodes") a.reject_episodes_csv = next();
     else if (k == "-h" || k == "--help") {
@@ -182,6 +186,7 @@ Args parseArgs(int argc, char** argv) {
           << "  [--trust-robust-k-mult K]\n"
           << "  [--landmarks | --no-landmarks] [--shoreline | --no-shoreline]\n"
           << "  [--camera | --no-camera] [--assoc-gate-chi2 CHI2] [--assoc-tight]\n"
+          << "  [--assoc-innovation]\n"
           << "  [--robust-polar none|huber|tukey|gmc] [--robust-polar-k K]\n"
           << "  [--odom | --no-odom] [--robust-odom none|huber|tukey|gmc]\n"
           << "  [--robust-odom-k K]\n"
@@ -814,6 +819,11 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
     const double sigma_pred_yaw = std::sqrt(
         sigma_marg_yaw * sigma_marg_yaw + sigma_pim_yaw * sigma_pim_yaw);
 
+    const double assoc_var_xy =
+        args.assoc_innovation ? sigma_pred_xy * sigma_pred_xy : 0.0;
+    const double assoc_var_yaw =
+        args.assoc_innovation ? sigma_pred_yaw * sigma_pred_yaw : 0.0;
+
     std::set<std::string> sensors_seen_this_step;
 
     std::vector<FactorRecord> factor_records;
@@ -1074,7 +1084,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
               const gtsam::Point3 ship_xy(pred.pose().x(), pred.pose().y(), 0.0);
               parnav::LandAssocResult ar = parnav::associateMarkerOrShipRangeOnly(
                   observer_pose, range_m, rs.sigma_range, d.markers,
-                  d.n_markers, ship_xy, assoc_gate_chi2);
+                  d.n_markers, ship_xy, assoc_gate_chi2, assoc_var_xy, assoc_var_yaw);
               if (!ar.matched) {
                 ++n_rejected;
                 continue;
@@ -1093,7 +1103,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
 
             parnav::AssocResult ar = parnav::associateMarkerRangeOnly(
                 observer_pose, range_m, rs.sigma_range, d.markers,
-                d.n_markers, assoc_gate_chi2);
+                d.n_markers, assoc_gate_chi2, assoc_var_xy, assoc_var_yaw);
             if (ar.marker_idx < 0) {
               ++n_rejected;
               continue;
@@ -1184,7 +1194,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
             parnav::LandAssocResult ar = parnav::associateMarkerOrShip(
                 observer_pose, ps.yaw_offset_rad, range_m, az_rad,
                 ps.sigma_range, ps.sigma_az_rad, {}, 0, ship_xy,
-                assoc_gate_chi2);
+                assoc_gate_chi2, assoc_var_xy, assoc_var_yaw);
             if (!ar.matched) {
               ++n_rejected;
               continue;
@@ -1238,7 +1248,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
               auto [sr, sa] = polar_marker_sigmas(ps, t, k);
               parnav::LandAssocResult ar = parnav::associateMarkerOrShip(
                   observer_pose, ps.yaw_offset_rad, rd[0], rd[1], sr, sa,
-                  d.markers, d.n_markers, ship_xy, assoc_gate_chi2);
+                  d.markers, d.n_markers, ship_xy, assoc_gate_chi2, assoc_var_xy, assoc_var_yaw);
               if (ar.matched && ar.maha < best_maha) {
                 best_maha = ar.maha;
                 k_best = k;
@@ -1263,7 +1273,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
                                                 ps.sigma_range, ps.sigma_az_rad};
               parnav::LandAssocResult ar = parnav::associateMarkerOrShip(
                   observer_pose, ps.yaw_offset_rad, range_m, az_rad, gr, ga,
-                  d.markers, d.n_markers, ship_xy, assoc_gate_chi2);
+                  d.markers, d.n_markers, ship_xy, assoc_gate_chi2, assoc_var_xy, assoc_var_yaw);
               if (!ar.matched) {
                 ++n_rejected;
                 continue;
@@ -1293,7 +1303,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
             parnav::AssocResult ar = parnav::associateMarker(
                 observer_pose, ps.yaw_offset_rad, range_m, az_rad,
                 ps.sigma_range, ps.sigma_az_rad, d.markers, d.n_markers,
-                assoc_gate_chi2);
+                assoc_gate_chi2, assoc_var_xy, assoc_var_yaw);
             if (ar.marker_idx < 0) {
               ++n_rejected;
               continue;
@@ -1330,7 +1340,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
             parnav::AssocResult ar = parnav::associateShoreline(
                 observer_pose, ps.yaw_offset_rad, range_m, az_rad,
                 ps.sigma_range, ps.sigma_az_rad, d.shoreline, d.n_shoreline,
-                assoc_gate_chi2);
+                assoc_gate_chi2, assoc_var_xy, assoc_var_yaw);
             if (ar.marker_idx < 0) {
               ++n_rejected;
               continue;
@@ -1399,7 +1409,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
             const gtsam::Point3 ship_xy(pred.pose().x(), pred.pose().y(), 0.0);
             parnav::LandAssocResult ar = parnav::associateMarkerBearingOrShip(
                 observer_pose, cs.yaw_offset_rad, az_rad, cs.sigma_az_rad,
-                d.markers, d.n_markers, ship_xy, assoc_gate_chi2);
+                d.markers, d.n_markers, ship_xy, assoc_gate_chi2, assoc_var_xy, assoc_var_yaw);
             if (!ar.matched) { ++n_rejected; continue; }
             if (ar.is_ship) {
               ship_matched = true;
@@ -1418,7 +1428,7 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
 
           parnav::AssocResult ar = parnav::associateMarkerBearing(
               observer_pose, cs.yaw_offset_rad, az_rad, cs.sigma_az_rad,
-              d.markers, d.n_markers, assoc_gate_chi2);
+              d.markers, d.n_markers, assoc_gate_chi2, assoc_var_xy, assoc_var_yaw);
           if (ar.marker_idx < 0) { ++n_rejected; continue; }
           graph.add(parnav::MarkerAzimuthFactor<gtsam::Pose3>(
               X(t), az_noise, az_rad, ar.marker_world, cs.yaw_offset_rad));

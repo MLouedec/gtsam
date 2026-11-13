@@ -105,6 +105,7 @@ SimMeta loadSimMeta(const std::string& json_path) {
       j.contains("imu") ? j.at("imu").value("imu_substeps", 1) : 1);
   m.dt_nominal = j.value("dt_nominal", 1.0);
   m.gravity = j.value("gravity", 9.81);
+  m.nav_frame = j.value("nav_frame", std::string{});
 
   const auto& sensors = j.at("sensors");
   for (const auto& g : sensors.value("gnss", nlohmann::json::array())) {

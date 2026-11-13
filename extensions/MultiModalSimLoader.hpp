@@ -118,6 +118,7 @@ struct SimMeta {
   int imu_substeps{1};
   double dt_nominal{1.0};
   double gravity{9.81};
+  std::string nav_frame;  // "NED" required (world NED, body FRD)
   std::vector<GnssSensorMeta> gnss;
   std::vector<PolarSensorMeta> polar;
   std::vector<CameraSensorMeta> camera;

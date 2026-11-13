@@ -564,7 +564,8 @@ void runAgent(const parnav::SimData3D& d, const parnav::SimMeta& meta,
   double sigma_b_acc = meta.imu.sigma_b_acc;
   double sigma_b_gyro = meta.imu.sigma_b_gyro;
 
-  auto p = gtsam::PreintegrationCombinedParams::MakeSharedU(g0);
+  // NED world (z down): gravity (0,0,+g); FRD body: accel reads (0,0,-g) at rest.
+  auto p = gtsam::PreintegrationCombinedParams::MakeSharedD(g0);
   p->accelerometerCovariance = gtsam::I_3x3 * sigma_acc * sigma_acc;
   p->gyroscopeCovariance = gtsam::I_3x3 * sigma_gyro * sigma_gyro;
   p->integrationCovariance = gtsam::I_3x3 * 1e-10;
@@ -1560,6 +1561,10 @@ int main(int argc, char** argv) {
     args.reject_windows = loadRejectEpisodes(args.reject_episodes_csv);
 
   parnav::SimMeta meta = parnav::loadSimMeta(args.meta);
+  if (meta.nav_frame != "NED")
+    throw std::runtime_error(
+        "meta nav_frame must be \"NED\" (world NED, body FRD, see "
+        "doc/frame_convention.md); got \"" + meta.nav_frame + "\"");
   parnav::SimData3D d = parnav::loadSimData(args.sim_data, meta);
 
   if (args.ship_index < 0 || args.ship_index >= d.n_ships)
